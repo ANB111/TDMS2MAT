@@ -35,7 +35,7 @@ t = np.arange(0, len(Fza_Hid) / Fs, 1 / Fs)
 
 # Conteo de ciclos Rainflow
 cycles = list(rainflow.extract_cycles(Fza_Hid))
-cFs = np.array([[c[2], c[1], c[0], 0, 0] for c in cycles])  # Ciclos, Rango, Media, ti, ts
+cFs = np.array([[c[2], c[1], c[0], 0, 0] for c in cycles])  # Ciclos, Media, Rango, ti, ts
 
 # Definición de curva K
 K = np.array([65.12307378, 57.01521195, 42.83250569, 27.55061352, 14.93805445, 
@@ -62,11 +62,11 @@ dK_thresholds = [14, 10.5, 7]
 filtered_dK = {thr: [] for thr in dK_thresholds}
 
 for cycle in cFs:
-    f_i = cycle[2] - cycle[1] / 2
-    f_s = cycle[2] + cycle[1] / 2
+    f_i = cycle[2] - cycle[1] / 2  # Media - Rango/2
+    f_s = cycle[2] + cycle[1] / 2  # Media + Rango/2
     k_i = splev(f_i, pp) if f_i >= 0 else 0
     k_s = splev(f_s, pp) if f_s >= 0 else 0
-    dK = k_s - k_i
+    dK = k_s - k_i  # delta K
 
     for thr in dK_thresholds:
         if dK >= thr:
@@ -77,14 +77,18 @@ if escritura:
     output_file = os.path.join(path, f"{name}.xlsx")
     with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
         # Guardar conteo Rainflow
-        df = pd.DataFrame(cFs, columns=['Ciclos', 'Rango [kN]', 'Media [kN]', 'ti [s]', 'ts [s]'])
+        df = pd.DataFrame(cFs, columns=['Ciclos', 'Media [kN]', 'Rango [kN]', 'ti [s]', 'ts [s]'])
+        # Reordenar columnas
+        df = df[['Ciclos', 'Rango [kN]', 'Media [kN]', 'ti [s]', 'ts [s]']]
         df.to_excel(writer, sheet_name='Conteo Rainflow', index=False)
 
         # Guardar filtrado por umbrales de dK
         for thr in dK_thresholds:
             df_filtered = pd.DataFrame(filtered_dK[thr], 
-                                       columns=['Ciclos', 'Rango [kN]', 'Media [kN]', 'ti [s]', 'ts [s]', 'delta K'])
+                                       columns=['Ciclos', 'Media [kN]', 'Rango [kN]', 'ti [s]', 'ts [s]', 'delta K'])
+            df_filtered = df_filtered[['Ciclos', 'Rango [kN]', 'Media [kN]', 'ti [s]', 'ts [s]']]
             df_filtered.to_excel(writer, sheet_name=f'delta K = {thr}', index=False)
+
 
 # Mensaje final
 X = f"{name} - Cantidad de Movimientos: {data[-1, 7] - data[0, 7]}"
