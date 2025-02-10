@@ -3,7 +3,7 @@ import scipy.io
 import pandas as pd
 from scipy.interpolate import splev, splrep
 import os
-import rainflow_lib as rainflow
+from rainflow import extract_cycles  # Importar la función extract_cycles del módulo
 
 # Parámetros de configuración
 escritura = True
@@ -14,7 +14,13 @@ name = '2025.01.16-u05'
 path = r'C:\Users\Becario 4\Documents\TDMS2MAT\salida'
 filename = f"{name}.mat"
 file = os.path.join(path, filename)
-data = scipy.io.loadmat(file)['data']
+
+try:
+    data = scipy.io.loadmat(file)['data']
+except FileNotFoundError:
+    raise FileNotFoundError(f"El archivo {filename} no se encontró en la ruta especificada.")
+except Exception as e:
+    raise RuntimeError(f"Error al cargar el archivo: {e}")
 
 # Parámetros de la adquisición
 Fs = 10  # Hz
@@ -30,24 +36,29 @@ A_c = np.pi * (Dc**2 - dc**2) / 4  # Área cerrar
 # Cálculo de fuerza hidráulica
 Fza_Hid = (data[:, 6] * A_c - data[:, 5] * A_a) * 100 / 5
 
+
 # Vector de tiempo
-t = np.arange(0, len(Fza_Hid) / Fs, 1 / Fs)
+t = np.round(np.linspace(0, (len(Fza_Hid) - 1) / Fs, len(Fza_Hid)), decimals=1)
 
 # Conteo de ciclos Rainflow
-cycles = list(rainflow.extract_cycles(Fza_Hid))
+cycles = list(extract_cycles(Fza_Hid))  # Usar la función extract_cycles del módulo
 cFs = np.array([[c[2], c[1], c[0]] for c in cycles])  # Ciclos, Media, Rango
 
 # Obtener los índices de los ciclos
-idx = [c[3] for c in cycles]  # Índices de los ciclos
-ti = t[idx]  # Tiempo inicial
+idx_start = [int(c[3]) for c in cycles]  # Índices iniciales
+idx_end = [int(c[4]) for c in cycles]    # Índices finales
 
-# Calculando correctamente ts usando el índice final de cada ciclo
-ts = []
-for i in range(len(cycles)):
-    cycle_end_idx = cycles[i][4]  # El índice final del ciclo
-    ts.append(t[cycle_end_idx])  # Tiempo final según el índice de finalización del ciclo
+# Validar índices
+if max(idx_start) >= len(t) or max(idx_end) >= len(t):
+    raise IndexError("Los índices de los ciclos están fuera de los límites del vector de tiempo.")
 
-ts = np.array(ts)  # Convertir a array de NumPy para manejarlo correctamente
+# Calcular ti y ts usando los índices
+ti = t[idx_start]  # Tiempo inicial
+ts = t[idx_end]    # Tiempo final
+
+# Redondear ti y ts a 1 decimal
+ti = np.round(ti, decimals=1)
+ts = np.round(ts, decimals=1)
 
 # Definición de curva K
 K = np.array([65.12307378, 57.01521195, 42.83250569, 27.55061352, 14.93805445, 
@@ -63,56 +74,37 @@ K_sorted = K[sorted_indices]
 if len(np.unique(F_sorted)) != len(F_sorted):
     raise ValueError("Error: F contiene valores duplicados. Elimina duplicados antes de interpolar.")
 
-# Interpolación Spline corregida
+# Interpolación Spline
 pp = splrep(F_sorted, K_sorted)
 
 # Filtrado por umbral de avance de fisura
 dK_thresholds = [14, 10.5, 7]
 filtered_dK = {thr: [] for thr in dK_thresholds}
-
 for i in range(len(cFs)):
     f_i = cFs[i, 2] - cFs[i, 1] / 2  # Media - Rango/2
     f_s = cFs[i, 2] + cFs[i, 1] / 2  # Media + Rango/2
     k_i = splev(f_i, pp) if f_i >= 0 else 0
     k_s = splev(f_s, pp) if f_s >= 0 else 0
     dK = k_s - k_i  # delta K
-
-    # Filtrar ciclos según los umbrales de dK
-    if dK >= dK_thresholds[0]:
-        filtered_dK[dK_thresholds[0]].append(np.append(cFs[i], [ti[i], ts[i], dK]))
-    if dK >= dK_thresholds[1]:
-        filtered_dK[dK_thresholds[1]].append(np.append(cFs[i], [ti[i], ts[i], dK]))
-    if dK >= dK_thresholds[2]:
-        filtered_dK[dK_thresholds[2]].append(np.append(cFs[i], [ti[i], ts[i], dK]))
+    for thr in dK_thresholds:
+        if dK >= thr:
+            filtered_dK[thr].append(np.append(cFs[i], [ti[i], ts[i], dK]))
 
 # Escritura de resultados en Excel
 if escritura:
     output_file = os.path.join(path, f"{name}.xlsx")
     with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
-        # Guardar conteo Rainflow con el orden de columnas correcto
+        # Guardar conteo Rainflow
         df = pd.DataFrame(cFs, columns=['Ciclos', 'Rango [kN]', 'Media [kN]'])
-        
-        # Intercambiar las columnas de Media y Rango
-        df['Rango [kN]'], df['Media [kN]'] = df['Media [kN]'], df['Rango [kN]']
-        
         df['ti [s]'] = ti
         df['ts [s]'] = ts
-        df = df[['Ciclos', 'Rango [kN]', 'Media [kN]', 'ti [s]', 'ts [s]']]  # Asegurarse que el orden sea correcto
         df.to_excel(writer, sheet_name='Conteo Rainflow', index=False)
 
-        # Guardar filtrado por umbrales de dK con el orden de columnas correcto
+        # Guardar filtrado por umbrales de dK
         for thr in dK_thresholds:
-            # Verificar si hay datos en el umbral
-            if filtered_dK[thr]:  # Solo proceder si hay datos
-                # Convertir a DataFrame
+            if filtered_dK[thr]:
                 df_filtered = pd.DataFrame(filtered_dK[thr], 
                                            columns=['Ciclos', 'Rango [kN]', 'Media [kN]', 'ti [s]', 'ts [s]', 'delta K'])
-                
-                # Intercambiar las columnas de Media y Rango
-                df_filtered['Rango [kN]'], df_filtered['Media [kN]'] = df_filtered['Media [kN]'], df_filtered['Rango [kN]']
-                
-                # Escribir en el Excel
-                df_filtered = df_filtered[['Ciclos', 'Rango [kN]', 'Media [kN]', 'ti [s]', 'ts [s]', 'delta K']]  # Asegurarse que el orden sea correcto
                 df_filtered.to_excel(writer, sheet_name=f'delta K = {thr}', index=False)
             else:
                 print(f"No hay datos para el umbral delta K = {thr}")

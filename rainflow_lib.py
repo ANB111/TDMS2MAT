@@ -1,6 +1,14 @@
+# coding: utf-8
+"""
+Implements rainflow cycle counting algorythm for fatigue analysis
+according to section 5.4.4 in ASTM E1049-85 (2011).
+"""
+from __future__ import division
 from collections import deque, defaultdict
 import math
-import numpy as np
+
+__version__ = "3.2.0"
+
 
 def _get_round_function(ndigits=None):
     if ndigits is None:
@@ -11,17 +19,23 @@ def _get_round_function(ndigits=None):
             return round(x, ndigits)
     return func
 
-def find_extrema(series):
-    """Find peaks and valleys in the series."""
-    extrema = []
-    for i in range(1, len(series) - 1):
-        if (series[i] > series[i - 1] and series[i] > series[i + 1]) or \
-           (series[i] < series[i - 1] and series[i] < series[i + 1]):
-            extrema.append((i, series[i]))
-    return extrema
 
-def reversals(series):
-    """Iterate reversal points in the series."""
+def reversals(series , threshold=1e-6):
+    """Iterate reversal points in the series.
+
+    A reversal point is a point in the series at which the first derivative
+    changes sign. Reversal is undefined at the first (last) point because the
+    derivative before (after) this point is undefined. The first and the last
+    points are treated as reversals.
+
+    Parameters
+    ----------
+    series : iterable sequence of numbers
+
+    Yields
+    ------
+    Reversal points as tuples (index, value).
+    """
     series = iter(series)
     x_last, x = next(series, None), next(series, None)
     if x_last is None or x is None:
@@ -30,7 +44,7 @@ def reversals(series):
     yield 0, x_last
     index = None
     for index, x_next in enumerate(series, start=1):
-        if x_next == x:
+        if abs(x_next - x) < threshold:  # Ignorar cambios menores que el umbral
             continue
         d_next = x_next - x
         if d_last * d_next < 0:
@@ -40,8 +54,20 @@ def reversals(series):
     if index is not None:
         yield index + 1, x_next
 
+
 def extract_cycles(series):
-    """Iterate cycles in the series."""
+    """Iterate cycles in the series.
+
+    Parameters
+    ----------
+    series : iterable sequence of numbers
+
+    Yields
+    ------
+    cycle : tuple
+        Each tuple contains (range, mean, count, start index, end index).
+        Count equals to 1.0 for full cycles and 0.5 for half cycles.
+    """
     points = deque()
 
     def format_output(point1, point2, count):
@@ -55,30 +81,60 @@ def extract_cycles(series):
         points.append(point)
 
         while len(points) >= 3:
+            # Form ranges X and Y from the three most recent points
             x1, x2, x3 = points[-3][1], points[-2][1], points[-1][1]
             X = abs(x3 - x2)
             Y = abs(x2 - x1)
 
             if X < Y:
+                # Read the next point
                 break
             elif len(points) == 3:
+                # Y contains the starting point
+                # Count Y as one-half cycle and discard the first point
                 yield format_output(points[0], points[1], 0.5)
                 points.popleft()
             else:
+                # Count Y as one cycle and discard the peak and the valley of Y
                 yield format_output(points[-3], points[-2], 1.0)
                 last = points.pop()
                 points.pop()
                 points.pop()
                 points.append(last)
     else:
+        # Count the remaining ranges as one-half cycles
         while len(points) > 1:
             yield format_output(points[0], points[1], 0.5)
             points.popleft()
 
+
 def count_cycles(series, ndigits=None, nbins=None, binsize=None):
-    """Count cycles in the series."""
+    """Count cycles in the series.
+
+    Parameters
+    ----------
+    series : iterable sequence of numbers
+    ndigits : int, optional
+        Round cycle magnitudes to the given number of digits before counting.
+        Use a negative value to round to tens, hundreds, etc.
+    nbins : int, optional
+        Specifies the number of cycle-counting bins.
+    binsize : int, optional
+        Specifies the width of each cycle-counting bin
+
+    Arguments ndigits, nbins and binsize are mutually exclusive.
+
+    Returns
+    -------
+    A sorted list containing pairs of range and cycle count.
+    The counts may not be whole numbers because the rainflow counting
+    algorithm may produce half-cycles. If binning is used then ranges
+    correspond to the right (high) edge of a bin.
+    """
     if sum(value is not None for value in (ndigits, nbins, binsize)) > 1:
-        raise ValueError("Arguments ndigits, nbins and binsize are mutually exclusive")
+        raise ValueError(
+            "Arguments ndigits, nbins and binsize are mutually exclusive"
+        )
 
     counts = defaultdict(float)
     cycles = (
@@ -93,9 +149,11 @@ def count_cycles(series, ndigits=None, nbins=None, binsize=None):
         nmax = 0
         for rng, count in cycles:
             quotient = rng / binsize
-            n = int(math.ceil(quotient))
+            n = int(math.ceil(quotient))  # using int for Python 2 compatibility
 
             if nbins and n > nbins:
+                # Due to floating point accuracy we may get n > nbins,
+                # in which case we move rng to the preceeding bin.
                 if (quotient % 1) > 1e-6:
                     raise Exception("Unexpected error")
                 n = n - 1
@@ -116,45 +174,3 @@ def count_cycles(series, ndigits=None, nbins=None, binsize=None):
             counts[rng] += count
 
     return sorted(counts.items())
-
-def rainflow(x, fs=None, t=None, ext=False):
-    """Rainflow counting algorithm similar to MATLAB's implementation."""
-    if ext:
-        # If extrema are provided, use them directly
-        idx = np.arange(len(x))
-        extrema = list(zip(idx, x))
-    else:
-        # Find extrema (peaks and valleys)
-        extrema = find_extrema(x)
-        idx = [i for i, _ in extrema]
-        x = [val for _, val in extrema]
-
-    # Perform rainflow counting
-    cycles = list(extract_cycles(x))
-
-    # Create the output matrix
-    C = np.array([
-        [count, rng, mean, idx[start], idx[end]]
-        for rng, mean, count, start, end in cycles
-    ])
-
-    # Compute the rainflow matrix
-    if len(cycles) > 0:
-        ranges = np.array([rng for rng, _, _, _, _ in cycles])
-        means = np.array([mean for _, mean, _, _, _ in cycles])
-        counts = np.array([count for _, _, count, _, _ in cycles])
-
-        # Add whole cycles
-        whole_cycles = counts == 1.0
-        ranges = np.concatenate([ranges, ranges[whole_cycles]])
-        means = np.concatenate([means, means[whole_cycles]])
-
-        # Compute 2D histogram (rainflow matrix)
-        rm, xedges, yedges = np.histogram2d(ranges, means, bins=10)
-
-        # Normalize the rainflow matrix
-        rm = rm / 2
-    else:
-        rm, xedges, yedges = np.array([]), np.array([]), np.array([])
-
-    return C, rm, xedges, yedges, idx
