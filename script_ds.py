@@ -90,12 +90,16 @@ for i in range(len(cFs)):
         if dK >= thr:
             filtered_dK[thr].append(np.append(cFs[i], [ti[i], ts[i], dK]))
 
-# Escritura de resultados en Excel
+# Guardar resultados en archivo Excel
 if escritura:
     output_file = os.path.join(path, f"{name}.xlsx")
     with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
         # Guardar conteo Rainflow
         df = pd.DataFrame(cFs, columns=['Ciclos', 'Rango [kN]', 'Media [kN]'])
+        
+        # Intercambiar columnas Rango [kN] y Media [kN]
+        df[['Rango [kN]', 'Media [kN]']] = df[['Media [kN]', 'Rango [kN]']].values
+        
         df['ti [s]'] = ti
         df['ts [s]'] = ts
         df.to_excel(writer, sheet_name='Conteo Rainflow', index=False)
@@ -105,10 +109,14 @@ if escritura:
             if filtered_dK[thr]:
                 df_filtered = pd.DataFrame(filtered_dK[thr], 
                                            columns=['Ciclos', 'Rango [kN]', 'Media [kN]', 'ti [s]', 'ts [s]', 'delta K'])
+                
+                # Intercambiar columnas Rango [kN] y Media [kN]
+                df_filtered[['Rango [kN]', 'Media [kN]']] = df_filtered[['Media [kN]', 'Rango [kN]']].values
+                
                 df_filtered.to_excel(writer, sheet_name=f'delta K = {thr}', index=False)
             else:
                 print(f"No hay datos para el umbral delta K = {thr}")
-
+                
 # Mensaje final
 Mov_rel = data[-1, 7] - data[0, 7]
 X = f"{name} - Cantidad de Movimientos: {Mov_rel}"
