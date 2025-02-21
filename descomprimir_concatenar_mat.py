@@ -259,7 +259,6 @@ def ordenar_y_agrupado_por_dia(input_folder, procesar_incompleto=False):
     # Eliminar los archivos CSV procesados
     eliminar_archivos_csv(csv_files)
 
-
 def eliminar_archivos_csv(csv_files):
     for file in csv_files:
         if os.path.exists(file):
@@ -333,6 +332,8 @@ def get_folders_from_user(config):
         config['input_folder'] = input("Ingrese la carpeta de entrada: ").strip()
     if 'output_folder' not in config:
         config['output_folder'] = input("Ingrese la carpeta de salida: ").strip()
+    if 'ruta_matlab_script' not in config:
+        config['ruta_matlab_script'] = input("Ingrese la ruta del script de MATLAB: ").strip()
     return config
 
 def select_processing_option(input_folder, config):
@@ -406,6 +407,51 @@ def select_processing_option(input_folder, config):
 
         return files_to_process, procesar_incompleto, unidad
 
+def run_matlab_script(name, FS=10, escritura=True, n_channels=16, ruta=None, matlab_path=None, ruta_matlab_script=None):
+    """
+    Ejecuta un script de MATLAB con los parámetros proporcionados.
+    
+    Parámetros:
+    - name (str): Nombre del archivo MAT a procesar.
+    - FS (int): Frecuencia de muestreo.
+    - escritura (bool): Habilita/deshabilita la escritura en MATLAB.
+    - n_channels (int): Número de canales.
+    - ruta (str): Ruta donde se encuentra el archivo MAT.
+    - matlab_path (str): Ruta al ejecutable de MATLAB.
+    
+    Retorna:
+    - None
+    """
+    # Configuración predeterminada si no se proporcionan valores
+    if matlab_path is None:
+        matlab_path = r"C:\Program Files\Polyspace\R2021a\bin\matlab.exe"
+
+    # Construir el comando para ejecutar MATLAB
+    command = [
+        matlab_path,
+        "-batch",
+        f"cd({ruta_matlab_script}); matlab_script('{name}', {str(escritura).lower()}, {FS}, {n_channels}, '{ruta}')"
+    ]
+
+    try:
+        # Ejecutar el comando
+        result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        print(f"MATLAB procesó correctamente: {name}")
+    except subprocess.CalledProcessError as e:
+        print(f"Error al ejecutar MATLAB para {name}:")
+        print(e.stderr)
+
+def process_mat_files(output_folder, ruta_matlab_script):
+    """
+    Procesa todos los archivos MAT en la carpeta de salida usando MATLAB.
+    """
+    mat_files = [f for f in os.listdir(output_folder) if f.endswith('.mat')]
+
+    for mat_file in tqdm(mat_files, desc="Procesando archivos MAT", unit="archivo"):
+        mat_file_path = os.path.join(output_folder, mat_file)
+        name = os.path.splitext(mat_file)[0]  # Extraer el nombre del archivo sin extensión
+        run_matlab_script(name, ruta=output_folder, ruta_matlab_script=ruta_matlab_script)
+
 def main():
     config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.json")
 
@@ -420,6 +466,7 @@ def main():
 
     input_folder = config['input_folder']
     output_folder = config['output_folder']
+    ruta_matlab_script = config['ruta_matlab_script']
 
     # Crear una carpeta intermedia temporal en Descargas
     temp_folder = os.path.join(os.path.expanduser("~"), "Downloads", "temp_processing")
@@ -448,6 +495,9 @@ def main():
 
         # Convertir de CSV a MAT en la carpeta temporal
         csv_to_mat(temp_folder, unidad)
+        
+        # Paso 4: Procesar archivos MAT con MATLAB
+        process_mat_files(temp_folder)
 
         # Copiar los resultados procesados a la carpeta de salida final
         print("Copiando archivos procesados a la carpeta de salida...")
