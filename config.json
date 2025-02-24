@@ -1,5 +1,10 @@
 {
     "input_folder": "C:\\Users\\Becario 4\\Documents\\TDMS2MAT\\entrada",
     "output_folder": "C:\\Users\\Becario 4\\Documents\\TDMS2MAT\\salida",
-    "last_processed_file": "U05_2025_01_16_08.zip"
+    "excel_output_folder": "C:\\Users\\Becario 4\\Documents\\TDMS2MAT\\salida_excels",
+    "ruta_matlab_script": "C:\\Users\\Becario 4\\Downloads",
+    "matlab_path": "C:\\Program Files\\Polyspace\\R2021a\\bin\\matlab.exe",
+    "FS": 10,
+    "escritura": true,
+    "n_channels": 16
 }

@@ -3,5 +3,7 @@
 \salida_concatenada
 \salida_mat
 \temp
+\salida_excels
+\__pycache__
 __pycache__/rainflow_lib.cpython-311.pyc
 __pycache__/rainflow.cpython-311.pyc
