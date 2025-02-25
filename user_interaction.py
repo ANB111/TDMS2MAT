@@ -44,6 +44,7 @@ def select_processing_option(input_folder, config):
     """
     Muestra las opciones al usuario para seleccionar cómo procesar los archivos.
     Solicita si se desea procesar el último archivo incompleto y permite corregir errores.
+    También pregunta si se desea realizar el conteo de ciclos de arranque y parada.
     """
     while True:
         print("\nSeleccione una opción:")
@@ -56,7 +57,6 @@ def select_processing_option(input_folder, config):
         # Obtener la lista de archivos ZIP en la carpeta de entrada
         zip_files = sorted([f for f in os.listdir(input_folder) if f.endswith('.zip')])
         last_processed_file = config.get('last_processed_file', None)
-
         if option == "1":
             if last_processed_file:
                 start_index = zip_files.index(last_processed_file) + 1
@@ -64,7 +64,6 @@ def select_processing_option(input_folder, config):
             else:
                 print("No hay registro de un último archivo procesado. Se procesarán todos los archivos.")
                 files_to_process = zip_files
-
         elif option == "2":
             print("\nArchivos disponibles:")
             for idx, f in enumerate(zip_files, start=1):
@@ -79,7 +78,6 @@ def select_processing_option(input_folder, config):
             except ValueError:
                 print("Entrada no válida. Intente de nuevo.")
                 continue
-
         elif option == "3":
             print("\nArchivos disponibles:")
             for idx, f in enumerate(zip_files, start=1):
@@ -95,21 +93,24 @@ def select_processing_option(input_folder, config):
             except ValueError:
                 print("Entrada no válida. Intente de nuevo.")
                 continue
-
         elif option == "4":
             print("Saliendo del programa.")
-            return None, None, None  # Indica que no se seleccionó nada
-
+            return None, None, None, False  # Indica que no se seleccionó nada y no se realizará el conteo
         else:
             print("Opción no válida. Intente de nuevo.")
             continue
         
         # Solicitar la unidad a procesar
         unidad = input("Indique la unidad que se va a procesar: ").strip()
-
+        
         # Preguntar si procesar el último archivo incompleto
         procesar_incompleto = input(
             "¿Desea procesar el último archivo del día aunque esté incompleto? (s/n): "
         ).strip().lower() == "s"
-
-        return files_to_process, procesar_incompleto, unidad
+        
+        # Preguntar si se desea realizar el conteo de ciclos de arranque y parada
+        realizar_conteo = input(
+            "¿Desea realizar el conteo de ciclos de arranque y parada? (s/n): "
+        ).strip().lower() in ['s', 'si', 'y', 'yes']
+        
+        return files_to_process, procesar_incompleto, unidad, realizar_conteo
