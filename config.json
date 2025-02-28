@@ -6,5 +6,11 @@
     "matlab_path": "C:\\Program Files\\Polyspace\\R2021a\\bin\\matlab.exe",
     "FS": 10,
     "escritura": true,
-    "n_channels": 16
+    "n_channels": 16,
+    "unidad": "05",
+    "procesar_incompleto": false,
+    "descomprimir": true,
+    "rainflow": true,
+    "realizar_conteo": true,
+    "graficos_matlab": false
 }

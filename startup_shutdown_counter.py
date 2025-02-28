@@ -37,7 +37,7 @@ def count_startups_shutdowns(mat_data):
 
     return startups, shutdowns, estado_inicial, estado_final
 
-def process_mat_folder(mat_folder, excel_path):
+def process_mat_folder(mat_folder, excel_path, log_callback=None):
     """
     Procesa todos los archivos .mat en la carpeta especificada y actualiza el archivo Excel.
     Solo procesa archivos que no han sido contabilizados previamente.
@@ -45,7 +45,15 @@ def process_mat_folder(mat_folder, excel_path):
     Parámetros:
     - mat_folder (str): Ruta de la carpeta que contiene los archivos .mat.
     - excel_path (str): Ruta del archivo Excel donde se guardarán los resultados.
+    - log_callback (function): Función de callback para registrar mensajes en el log.
     """
+    # Función de registro
+    def log(message):
+        if log_callback:
+            log_callback(message)
+        else:
+            print(message)
+
     # Verificar si el archivo Excel ya existe
     if os.path.exists(excel_path):
         df_excel = pd.read_excel(excel_path)
@@ -64,7 +72,7 @@ def process_mat_folder(mat_folder, excel_path):
 
         # Verificar si el archivo ya fue procesado
         if mat_file in processed_files:
-            print(f"El archivo {mat_file} ya fue procesado. Saltando...")
+            log(f"El archivo {mat_file} ya fue procesado. Saltando...")
             continue
 
         try:
@@ -78,6 +86,12 @@ def process_mat_folder(mat_folder, excel_path):
             # Contar arranques, paradas y obtener estados inicial y final
             startups, shutdowns, estado_inicial, estado_final = count_startups_shutdowns(mat_data)
             total = startups + shutdowns
+
+            # Mostrar una previsualización en el log
+            log(f"Procesado: {mat_file}")
+            log(f"  Fecha: {date}")
+            log(f"  Arranques: {startups}, Paradas: {shutdowns}, Total: {total}")
+            log(f"  Estado Inicial: {estado_inicial}, Estado Final: {estado_final}")
 
             # Agregar nueva fila al DataFrame
             new_row = {
@@ -95,8 +109,8 @@ def process_mat_folder(mat_folder, excel_path):
             processed_files.add(mat_file)
 
         except Exception as e:
-            print(f"Error procesando {mat_file}: {e}")
+            log(f"Error procesando {mat_file}: {e}")
 
     # Guardar el archivo Excel actualizado
     df_excel.to_excel(excel_path, index=False)
-    print(f"Resultados guardados en {excel_path}")
+    log(f"Resultados guardados en {excel_path}")
