@@ -2,7 +2,7 @@
     "input_folder": "C:\\Users\\Becario 4\\Documents\\TDMS2MAT\\entrada",
     "output_folder": "C:\\Users\\Becario 4\\Documents\\TDMS2MAT\\salida",
     "excel_output_folder": "C:\\Users\\Becario 4\\Documents\\TDMS2MAT\\salida_excels",
-    "ruta_matlab_script": "C:\\Users\\Becario 4\\Downloads",
+    "ruta_matlab_script": "matlab_script.m",
     "matlab_path": "C:\\Program Files\\Polyspace\\R2021a\\bin\\matlab.exe",
     "FS": 10,
     "escritura": true,
