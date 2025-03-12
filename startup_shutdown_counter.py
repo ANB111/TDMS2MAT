@@ -64,7 +64,6 @@ def process_mat_folder(mat_folder, excel_path):
 
         # Verificar si el archivo ya fue procesado
         if mat_file in processed_files:
-            print(f"El archivo {mat_file} ya fue procesado. Saltando...")
             continue
 
         try:

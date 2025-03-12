@@ -2,24 +2,11 @@ import os
 import shutil
 import pandas as pd
 from tqdm import tqdm
+import glob
 
-def ordenar_y_agrupado_por_dia(input_folder, procesar_incompleto=False):
-    script_folder = os.path.dirname(os.path.abspath(__file__))
-    temp_folder = os.path.join(script_folder, 'temp')
-
-    if not os.path.exists(temp_folder):
-        os.makedirs(temp_folder)
-
-    for temp_file_name in os.listdir(temp_folder):
-        temp_file_path = os.path.join(temp_folder, temp_file_name)
-        if os.path.exists(temp_file_path):
-            shutil.move(temp_file_path, os.path.join(input_folder, temp_file_name))
-
-    csv_files = [
-        os.path.join(root, file)
-        for root, _, files in os.walk(input_folder)
-        for file in files if file.endswith(".csv")
-    ]
+def ordenar_y_agrupado_por_dia(input_folder):
+    # Obtener lista de archivos CSV en la carpeta de entrada
+    csv_files = glob.glob(os.path.join(input_folder, "*.csv"))
 
     if not csv_files:
         print("No se encontraron archivos CSV en la carpeta especificada.")
@@ -39,20 +26,27 @@ def ordenar_y_agrupado_por_dia(input_folder, procesar_incompleto=False):
 
     for date, groups in tqdm(datos_por_dia.items(), desc="Concatenando archivos por día", unit="día"):
         daily_data = pd.concat(groups, ignore_index=True)
-        daily_data.drop('Date', axis=1, inplace=True)
+        daily_data.drop(columns=['Date'], inplace=True)
         output_file = os.path.join(input_folder, f"{date}.csv")
+        
         daily_data.to_csv(output_file, sep=";", decimal=",", index=False)
 
+        # Verificar si el archivo del día está completo
         last_time = daily_data['Time'].max()
-        if last_time.hour != 23 or last_time.minute != 59 or last_time.second != 59:
-            temp_file = os.path.join(temp_folder, f"{date}_temp.csv")
+        temp_file = os.path.join(input_folder, f"{date}_temp.csv")
+
+        if last_time.hour == 23 and last_time.minute == 59 and last_time.second == 59:
+            # Si el día está completo, eliminamos el archivo _temp.csv si existe
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        else:
+            # Si el día no está completo, aseguramos que _temp.csv se mantenga
             shutil.copy(output_file, temp_file)
-            if not procesar_incompleto:
-                os.remove(output_file)
 
     eliminar_archivos_csv(csv_files)
 
 def eliminar_archivos_csv(csv_files):
+    """Elimina los archivos CSV procesados (excepto los _temp.csv)."""
     for file in csv_files:
-        if os.path.exists(file):
+        if os.path.exists(file) and not file.endswith("_temp.csv"):
             os.remove(file)
