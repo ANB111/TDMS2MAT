@@ -12,5 +12,8 @@
     "descomprimir": true,
     "rainflow": true,
     "realizar_conteo": true,
-    "graficos_matlab": false
+    "graficos_matlab": false,
+    "selected_files": [
+        "prueba1.zip"
+    ]
 }
