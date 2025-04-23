@@ -20,6 +20,7 @@ class App:
             "input_folder": StringVar(),
             "output_folder": StringVar(),
             "excel_output_folder": StringVar(),
+            "last_processed": StringVar(value=""),
             "ruta_matlab_script": StringVar(),
             "matlab_path": StringVar(),
             "FS": IntVar(value=10),
@@ -35,6 +36,9 @@ class App:
 
         # Bandera para detener el procesamiento
         self.stop_event = Event()
+        
+        self.process_from_last = ttk.BooleanVar(value=False)
+
 
         # Lista de archivos seleccionados (almacena rutas completas)
         self.selected_files = []
@@ -93,9 +97,32 @@ class App:
             listbox.selection_set(i) if select else listbox.selection_clear(i)
 
     def get_selected_files(self):
-        """Obtiene las rutas completas de los archivos seleccionados."""
         input_folder = self.config["input_folder"].get()
-        return [os.path.join(input_folder, file) for file in self.selected_files]
+        
+        if self.process_from_last.get():
+            # Procesar desde el último archivo guardado
+            last_processed = self.config.get("last_processed")
+            if last_processed in self.selected_files:
+                start_index = self.selected_files.index(last_processed) + 1  # +1 para comenzar después
+                files_to_process = self.selected_files[start_index:]
+                return [os.path.join(input_folder, f) for f in files_to_process]
+            else:
+                print("Advertencia: 'last_processed' no se encontró en la lista de archivos seleccionados.")
+                return []
+        else:
+            # Procesar archivos seleccionados manualmente
+            if not hasattr(self, "files_listbox"):
+                print("Error: Listbox de archivos no está disponible.")
+                return []
+
+            selected_indices = self.files_listbox.curselection()
+            if not selected_indices:
+                print("Advertencia: No se seleccionaron archivos manualmente.")
+                return []
+
+            return [os.path.join(input_folder, self.selected_files[i]) for i in selected_indices]
+
+
     
     def add_selected_files(self):
         """Agrega archivos seleccionados de la lista disponible a la lista de archivos seleccionados."""
@@ -147,9 +174,8 @@ class App:
 
         # Obtener las rutas completas de los archivos seleccionados
         self.selected_files_full_paths = self.get_selected_files()
-        if not self.selected_files_full_paths:
-            messagebox.showerror("Error", "No se han seleccionado archivos para procesar.")
-            return
+
+
 
         # Guardar la configuración actualizada en el archivo JSON
         self.save_config()
@@ -159,8 +185,26 @@ class App:
         self.progress.start()
         self.log_text.delete("1.0", "end")
 
+        if self.process_from_last.get():
+            try:
+                with open(CONFIG_FILE, "r") as f:
+                    config_data = json.load(f)
+                last_file = config_data.get("last_processed", "")
+                if last_file in self.selected_files:
+                    last_index = self.selected_files.index(last_file)
+                    self.selected_files = self.selected_files[last_index + 1:]
+                    self.selected_listbox.delete(0, "end")
+                    for file in self.selected_files:
+                        self.selected_listbox.insert("end", file)
+            except Exception as e:
+                self.log_message(f"Error al aplicar filtro de último archivo: {e}")
+
+
+
         # Ejecutar el procesamiento en un hilo separado
         Thread(target=self.run_main, daemon=True).start()
+
+
 
 
     def run_main(self):
@@ -175,11 +219,32 @@ class App:
             # Llamar a la función principal
             main(config, log_callback=self.log_message)
 
-            self.log_message("El procesamiento ha finalizado correctamente.")
+            if self.selected_files:
+                last_processed = self.selected_files[-1]
+                self.save_last_processed(last_processed)
+                self.log_message("El procesamiento ha finalizado correctamente.")
+
         except Exception as e:
             self.log_message(f"Ocurrió un error: {e}")
         finally:
             self.progress.stop()  # Detener la barra de progreso
+
+    def save_last_processed(self, filepath):
+        """Guarda el último archivo procesado en la configuración."""
+        try:
+            filename = os.path.basename(filepath)  # Asegura que guardás solo el nombre
+            with open(CONFIG_FILE, "r") as f:
+                config = json.load(f)
+            
+            config["last_processed"] = filename
+            
+            # Guardar la configuración actualizada
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(config, f, indent=4)
+            
+            self.log_message(f"Último archivo procesado guardado: {filename}")
+        except Exception as e:
+            self.log_message(f"Error al guardar el último archivo procesado: {e}")
 
     def save_config(self):
         """
@@ -211,6 +276,12 @@ class App:
                     for k, v in data.items():
                         if k in self.config:
                             self.config[k].set(v)
+                    
+                    # Mantener la configuración del último archivo procesado si existe
+                    last_processed = data.get("last_processed", "")
+                    if last_processed:
+                        self.config["last_processed"] = last_processed
+                    
                 # Guardar la configuración actualizada sin "selected_files"
                 self.save_config()
         except Exception as e:
@@ -221,116 +292,107 @@ class App:
         messagebox.showinfo("Información", "La configuración avanzada aún no está disponible.")
 
     def create_widgets(self):
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(1, weight=1)
+
         main_frame = ttk.Frame(self.root, padding=10)
         main_frame.grid(row=0, column=0, sticky="nsew")
-        main_frame.grid_columnconfigure(0, weight=1)  # Columna izquierda
-        main_frame.grid_columnconfigure(1, weight=1)  # Columna derecha
-        main_frame.grid_rowconfigure(7, weight=1)     # Fila expansiva para el log
+        main_frame.grid_columnconfigure((0, 1), weight=1)
+        main_frame.grid_rowconfigure(2, weight=1)  # Rutas, archivos, resto
 
-        # Título
-        ttk.Label(main_frame, text="Configuración de Procesamiento", font=("Helvetica", 14, "bold")).grid(
-            row=0, column=0, columnspan=2, pady=10, sticky="w"
-        )
-
-        # Columna izquierda
-        left_frame = ttk.Frame(main_frame)
-        left_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-        left_frame.grid_columnconfigure(0, weight=1)
-        left_frame.grid_rowconfigure(4, weight=1)
-
-        # Rutas de archivos y carpetas
-        paths_frame = ttk.Labelframe(left_frame, text="Rutas de Archivos y Carpetas", padding=10)
-        paths_frame.grid(row=0, column=0, sticky="ew", pady=5)
-        paths_frame.grid_columnconfigure(0, weight=1)
+        # === Rutas (OCUPAN LAS DOS COLUMNAS) ===
+        paths_frame = ttk.Labelframe(main_frame, text="Rutas de Archivos y Carpetas", padding=10)
+        paths_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
         self.create_folder_input(paths_frame, "Carpeta de Entrada:", "input_folder")
         self.create_folder_input(paths_frame, "Carpeta de Salida:", "output_folder")
         self.create_folder_input(paths_frame, "Carpeta de Salida Excel:", "excel_output_folder")
 
-        # Archivos disponibles
-        available_files_frame = ttk.Labelframe(left_frame, text="Archivos Disponibles", padding=10)
-        available_files_frame.grid(row=1, column=0, sticky="nsew", pady=5)
-        available_files_frame.grid_columnconfigure(0, weight=1)
-        available_files_frame.grid_rowconfigure(0, weight=1)
+        # === Archivos (DOS COLUMNAS ALINEADAS) ===
+        files_frame_left = ttk.Labelframe(main_frame, text="Archivos Disponibles", padding=10)
+        files_frame_left.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        files_frame_left.grid_rowconfigure(0, weight=1)
+        files_frame_left.grid_columnconfigure(0, weight=1)
 
-        self.available_listbox = Listbox(available_files_frame, selectmode="extended")
+        self.available_listbox = Listbox(files_frame_left, selectmode="extended")
         self.available_listbox.grid(row=0, column=0, sticky="nsew")
-        scrollbar_available = ttk.Scrollbar(available_files_frame, orient="vertical", command=self.available_listbox.yview)
+        scrollbar_available = ttk.Scrollbar(files_frame_left, orient="vertical", command=self.available_listbox.yview)
         scrollbar_available.grid(row=0, column=1, sticky="ns")
         self.available_listbox.config(yscrollcommand=scrollbar_available.set)
 
-        # Botones para refrescar y seleccionar
-        button_frame_left = ttk.Frame(available_files_frame)
+        button_frame_left = ttk.Frame(files_frame_left)
         button_frame_left.grid(row=1, column=0, pady=5)
         ttk.Button(button_frame_left, text="Refrescar Lista", command=self.refresh_file_list).grid(row=0, column=0, padx=5)
         ttk.Button(button_frame_left, text="Seleccionar Todos", command=lambda: self.toggle_all_files(self.available_listbox, select=True)).grid(row=0, column=1, padx=5)
         ttk.Button(button_frame_left, text="Deseleccionar Todos", command=lambda: self.toggle_all_files(self.available_listbox, select=False)).grid(row=0, column=2, padx=5)
 
-        # Parámetros de procesamiento
-        params_frame = ttk.Labelframe(left_frame, text="Parámetros de Procesamiento", padding=10)
-        params_frame.grid(row=2, column=0, sticky="ew", pady=5)
-        grid_frame = ttk.Frame(params_frame)
-        grid_frame.grid(row=0, column=0)
-        self.create_labeled_entry(grid_frame, "Frecuencia de Muestreo (FS):", "FS", 0, 0)
-        self.create_labeled_entry(grid_frame, "Número de Canales:", "n_channels", 0, 1)
-        self.create_labeled_entry(grid_frame, "Unidad a Procesar:", "unidad", 1, 0)
+        files_frame_right = ttk.Labelframe(main_frame, text="Archivos Seleccionados", padding=10)
+        files_frame_right.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+        files_frame_right.grid_rowconfigure(0, weight=1)
+        files_frame_right.grid_columnconfigure(0, weight=1)
 
-        ttk.Checkbutton(params_frame, text="Habilitar escritura en MATLAB", variable=self.config["escritura"], bootstyle="round-toggle").grid(row=1, column=0, sticky="w", pady=2)
-        ttk.Checkbutton(params_frame, text="Procesar archivos incompletos", variable=self.config["procesar_incompleto"], bootstyle="round-toggle").grid(row=2, column=0, sticky="w", pady=2)
-        ttk.Checkbutton(params_frame, text="Generar Gráficos MATLAB", variable=self.config["graficos_matlab"], bootstyle="round-toggle").grid(row=3, column=0, sticky="w", pady=2)
-
-        # Columna derecha
-        right_frame = ttk.Frame(main_frame)
-        right_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
-        right_frame.grid_columnconfigure(0, weight=1)
-        right_frame.grid_rowconfigure(0, weight=1)
-
-        # Archivos seleccionados
-        selected_files_frame = ttk.Labelframe(right_frame, text="Archivos Seleccionados", padding=10)
-        selected_files_frame.grid(row=0, column=0, sticky="nsew", pady=5)
-        selected_files_frame.grid_columnconfigure(0, weight=1)
-        selected_files_frame.grid_rowconfigure(0, weight=1)
-
-        self.selected_listbox = Listbox(selected_files_frame, selectmode="extended")
+        self.selected_listbox = Listbox(files_frame_right, selectmode="extended")
         self.selected_listbox.grid(row=0, column=0, sticky="nsew")
-        scrollbar_selected = ttk.Scrollbar(selected_files_frame, orient="vertical", command=self.selected_listbox.yview)
+        scrollbar_selected = ttk.Scrollbar(files_frame_right, orient="vertical", command=self.selected_listbox.yview)
         scrollbar_selected.grid(row=0, column=1, sticky="ns")
         self.selected_listbox.config(yscrollcommand=scrollbar_selected.set)
 
-        # Botones para agregar/quitar archivos
-        button_frame_right = ttk.Frame(selected_files_frame)
+        button_frame_right = ttk.Frame(files_frame_right)
         button_frame_right.grid(row=1, column=0, pady=5)
         ttk.Button(button_frame_right, text="Agregar >", command=self.add_selected_files).grid(row=0, column=0, padx=5)
         ttk.Button(button_frame_right, text="< Quitar", command=self.remove_selected_files).grid(row=0, column=1, padx=5)
 
-        # Procesos a ejecutar
-        process_frame = ttk.Labelframe(right_frame, text="Procesos a Ejecutar", padding=10)
-        process_frame.grid(row=1, column=0, sticky="ew", pady=5)
-        ttk.Checkbutton(process_frame, text="Descomprimir Archivos", variable=self.config["descomprimir"], bootstyle="round-toggle").grid(row=0, column=0, sticky="w", pady=2)
-        ttk.Checkbutton(process_frame, text="Aplicar Rainflow", variable=self.config["rainflow"], bootstyle="round-toggle").grid(row=1, column=0, sticky="w", pady=2)
-        ttk.Checkbutton(process_frame, text="Realizar Conteo de Arranques/Paradas", variable=self.config["realizar_conteo"], bootstyle="round-toggle").grid(row=2, column=0, sticky="w", pady=2)
+        # === PARÁMETROS, PROCESOS Y LOGS (OCUPAN DOS COLUMNAS) ===
 
-        # Barra de progreso
-        self.progress = ttk.Progressbar(main_frame, mode="indeterminate", bootstyle="info-striped")
-        self.progress.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
+# Frame de parámetros
+        params_frame = ttk.Labelframe(main_frame, text="Parámetros de Procesamiento", padding=10)
+        params_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
 
-        # Área de registro (log)
+        # Entradas de FS, canales y unidad
+        grid_frame = ttk.Frame(params_frame)
+        grid_frame.grid(row=0, column=0, columnspan=2, sticky="w")
+        self.create_labeled_entry(grid_frame, "Frecuencia de Muestreo (FS):", "FS", 0, 0)
+        self.create_labeled_entry(grid_frame, "Número de Canales:", "n_channels", 0, 1)
+        self.create_labeled_entry(grid_frame, "Unidad a Procesar:", "unidad", 0, 2)
+
+        # Nuevo frame para los checkbuttons, más compacto
+        check_frame = ttk.Frame(params_frame)
+        check_frame.grid(row=1, column=0, columnspan=5, sticky="w", pady=5)
+
+        # Configurar columnas con peso uniforme para evitar separación excesiva
+        check_frame.grid_columnconfigure(0, weight=1)
+        check_frame.grid_columnconfigure(1, weight=1)
+
+        # Colocar checkbuttons en dos columnas
+        ttk.Checkbutton(check_frame, text="Habilitar escritura en MATLAB", variable=self.config["escritura"], bootstyle="round-toggle").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=2)
+        ttk.Checkbutton(check_frame, text="Procesar archivos incompletos", variable=self.config["procesar_incompleto"], bootstyle="round-toggle").grid(row=1, column=2, sticky="w", pady=2)
+
+        ttk.Checkbutton(check_frame, text="Generar Gráficos MATLAB", variable=self.config["graficos_matlab"], bootstyle="round-toggle").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=2)
+        ttk.Checkbutton(check_frame, text="Procesar desde el último archivo", variable=self.process_from_last, bootstyle="round-toggle").grid(row=2, column=2, sticky="w", pady=2)
+
+        ttk.Checkbutton(check_frame, text="Aplicar Rainflow", variable=self.config["rainflow"], bootstyle="round-toggle").grid(row=3, column=0, sticky="w", padx=(0, 10), pady=2)
+        ttk.Checkbutton(check_frame, text="Realizar Conteo de Arranques/Paradas", variable=self.config["realizar_conteo"], bootstyle="round-toggle").grid(row=3, column=2, sticky="w", pady=2)
+
+
         log_frame = ttk.Labelframe(main_frame, text="Registro de Procesamiento", padding=10)
-        log_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=10, pady=5)
-        log_frame.grid_columnconfigure(0, weight=1)
+        log_frame.grid(row=4, column=0, columnspan=2, sticky="nsew", pady=5)
         log_frame.grid_rowconfigure(0, weight=1)
-
+        log_frame.grid_columnconfigure(0, weight=1)
         self.log_text = ttk.Text(log_frame, wrap="word", height=10)
         self.log_text.grid(row=0, column=0, sticky="nsew")
         scrollbar_log = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         scrollbar_log.grid(row=0, column=1, sticky="ns")
         self.log_text.config(yscrollcommand=scrollbar_log.set)
 
-        # Botones de acción
+        # === Barra de Progreso + Botones ===
+        self.progress = ttk.Progressbar(main_frame, mode="indeterminate", bootstyle="info-striped")
+        self.progress.grid(row=5, column=0, columnspan=2, sticky="ew", pady=5)
+
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=5)
+        btn_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=5)
         ttk.Button(btn_frame, text="Iniciar Procesamiento", command=self.start_processing, bootstyle="success-outline").grid(row=0, column=0, padx=5)
         ttk.Button(btn_frame, text="Detener Procesamiento", command=self.stop_processing, bootstyle="danger-outline").grid(row=0, column=1, padx=5)
         ttk.Button(btn_frame, text="Configuración Avanzada", command=self.open_advanced_config, bootstyle="info-outline").grid(row=0, column=2, padx=5)
+
 
 # Inicialización de la aplicación
 root = ttk.Window(themename="superhero")

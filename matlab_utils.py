@@ -5,51 +5,47 @@ from tqdm import tqdm
 
 def run_matlab_script(name, config):
     """
-    Ejecuta un script de MATLAB con los parámetros proporcionados en el archivo de configuración.
-    
-    Parámetros:
-    - name (str): Nombre del archivo MAT a procesar.
-    - config (dict): Diccionario con la configuración cargada desde el archivo JSON.
-    
-    Retorna:
-    - None
+    Ejecuta la función MATLAB 'procesar_matlab' con los parámetros desde el archivo de configuración.
     """
-    # Extraer parámetros del archivo de configuración
     matlab_path = config.get("matlab_path", r"C:\Program Files\Polyspace\R2021a\bin\matlab.exe")
     ruta_matlab_script = config.get("ruta_matlab_script", "")
     FS = config.get("FS", 10)
     escritura = config.get("escritura", True)
-    n_channels = config.get("n_channels", 16)
     mat_folder = config.get("output_folder", "")
     excel_folder = config.get("excel_output_folder", "")
-    graficos_matlab = config.get("graficos_matlab", False)  # Verificar si los gráficos están activados
+    graficos_matlab = config.get("graficos_matlab", False)
 
-    # Crear la carpeta de salida para Excel si no existe
     os.makedirs(excel_folder, exist_ok=True)
 
-    # Construir el comando base para ejecutar MATLAB
+    # Ruta completa al archivo .mat
+    mat_file_path = os.path.join(mat_folder, f"{name}.mat")
+
+    # Comando para ejecutar la función MATLAB
     command = [
         matlab_path,
-        "-nosplash",  # Oculta la pantalla de inicio de MATLAB
-        "-nodesktop" if not graficos_matlab else "",  # Modo sin interfaz gráfica si graficos_matlab es False
-        "-r",  # Ejecutar un comando
-        f"cd('{ruta_matlab_script}'); matlab_script('{name}', {str(escritura).lower()}, {FS}, {n_channels}, '{mat_folder}', '{excel_folder}'); exit;"  # Comando MATLAB
+        "-nosplash",
+        "-nodesktop" if not graficos_matlab else "",
+        "-r",
+        (
+            f"cd('{ruta_matlab_script}'); "
+            f"procesar_matlab('{mat_file_path}', '{excel_folder}', {str(graficos_matlab).lower()}, "
+            f"{str(escritura).lower()}, {FS}); exit;"
+        )
     ]
 
-    # Filtrar elementos vacíos del comando
-    command = [arg for arg in command if arg]
+    command = [arg for arg in command if arg]  # Filtrar vacíos
 
     try:
-        # Ejecutar el comando
         if graficos_matlab:
             print(f"Ejecutando MATLAB en modo interactivo para el archivo: {name}")
-            subprocess.run(command, check=True)  # No capturamos stdout/stderr en modo interactivo
+            subprocess.run(command, check=True)
         else:
             print(f"Ejecutando MATLAB en segundo plano para el archivo: {name}")
             result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            print(result.stdout)  # Mostrar la salida estándar
+            print(result.stdout)
     except subprocess.CalledProcessError as e:
         print(f"Error al ejecutar MATLAB para el archivo {name}: {e.stderr}")
+
 
 def process_mat_files(output_folder, config):
     """
