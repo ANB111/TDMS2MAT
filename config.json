@@ -2,7 +2,7 @@
     "input_folder": "C:\\Users\\Becario 4\\Documents\\TDMS2MAT\\entrada",
     "output_folder": "C:\\Users\\Becario 4\\Documents\\TDMS2MAT\\salida",
     "excel_output_folder": "C:\\Users\\Becario 4\\Documents\\TDMS2MAT\\salida_excels",
-    "last_processed": "U05_2025_01_08_09.zip",
+    "last_processed": "prueba2.zip",
     "ruta_matlab_script": "C:\\Users\\Becario 4\\Documents\\TDMS2MAT",
     "matlab_path": "C:\\Program Files\\Polyspace\\R2021a\\bin\\matlab.exe",
     "FS": 10,
@@ -14,6 +14,6 @@
     "realizar_conteo": false,
     "graficos_matlab": true,
     "selected_files": [
-        "U05_2025_01_16_08.zip"
+        "prueba2.zip"
     ]
 }
