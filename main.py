@@ -1,5 +1,11 @@
 import os
-from config_utils import load_config, save_config
+import logging
+import traceback
+from pathlib import Path
+from typing import Dict, Any, Callable, Optional, List
+
+# Importaciones más específicas
+from config_utils import load_config, save_config, validate_config
 from decompress_utils import decompress_zip_files
 from tdms_utils import procesar_archivos_tdms_paralelo
 from csv_utils import ordenar_y_agrupado_por_dia
@@ -7,15 +13,107 @@ from mat_utils import csv_to_mat
 from matlab_utils import process_mat_files
 from startup_shutdown_counter import process_mat_folder
 
-def main(config, log_callback=None):
-    # Función de registro
-    def log(message):
+
+class ProcessingError(Exception):
+    """Excepción personalizada para errores de procesamiento."""
+    pass
+
+
+def setup_folders(folders: List[str], log_func: Callable[[str], None]) -> bool:
+    """
+    Configura y verifica las carpetas necesarias.
+    
+    Args:
+        folders: Lista de carpetas a verificar/crear
+        log_func: Función para registrar mensajes
+    
+    Returns:
+        True si todo fue exitoso, False en caso contrario
+    """
+    for folder in folders:
+        if not folder:  # Evitar crear carpetas vacías
+            log_func(f"ADVERTENCIA: Ruta de carpeta vacía detectada")
+            return False
+            
+        folder_path = Path(folder)
+        if not folder_path.exists():
+            try:
+                log_func(f"La carpeta '{folder}' no existe. Creándola...")
+                folder_path.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                log_func(f"ERROR: No se pudo crear la carpeta '{folder}': {e}")
+                return False
+    return True
+
+
+def process_stage(name: str, func: Callable, args: tuple, 
+                  log_func: Callable[[str], None], continue_on_error: bool = False) -> bool:
+    """
+    Ejecuta una etapa de procesamiento con manejo de errores estándar.
+    
+    Args:
+        name: Nombre de la etapa para el registro
+        func: Función a ejecutar
+        args: Argumentos para la función
+        log_func: Función para registrar mensajes
+        continue_on_error: Si es True, no detiene el proceso en caso de error
+    
+    Returns:
+        True si la etapa fue exitosa, False en caso contrario
+    """
+    log_func(f"Iniciando: {name}...")
+    try:
+        func(*args)
+        log_func(f"Completado: {name}.")
+        return True
+    except Exception as e:
+        error_details = traceback.format_exc()
+        log_func(f"ERROR en {name}: {e}")
+        log_func(f"Detalles: {error_details}")
+        if not continue_on_error:
+            return False
+        log_func(f"Continuando a pesar del error...")
+        return False
+
+
+def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] = None) -> bool:
+    """
+    Función principal de procesamiento con manejo mejorado de errores y configuración.
+    
+    Args:
+        config: Diccionario de configuración
+        log_callback: Función opcional para registrar mensajes
+    
+    Returns:
+        True si el proceso fue exitoso, False en caso contrario
+    """
+    # Configurar registro
+    def log(message: str, level: int = logging.INFO):
         if log_callback:
             log_callback(message)
         else:
             print(message)
-
-    # Asignar variables de configuración
+        
+        # También podríamos registrar en un archivo de registro
+        logging.log(level, message)
+    
+    # Configurar registro a archivo
+    log_file = Path(config.get('output_folder', '.')) / 'processing.log'
+    logging.basicConfig(
+        filename=str(log_file),
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    log(f"Iniciando procesamiento con configuración: {config}", logging.DEBUG)
+    
+    # Validar configuración
+    if not validate_config(config):
+        log("ERROR: Configuración inválida. Abortando proceso.", logging.ERROR)
+        return False
+    
+    # Extraer parámetros de configuración con valores por defecto
     input_folder = config.get('input_folder', '')
     output_folder = config.get('output_folder', '')
     excel_output_folder = config.get('excel_output_folder', '')
@@ -24,79 +122,94 @@ def main(config, log_callback=None):
     realizar_conteo = config.get('realizar_conteo', False)
     descomprimir = config.get('descomprimir', False)
     rainflow = config.get('rainflow', False)
-    graficos_matlab = config.get('graficos_matlab', False)
-    selected_files = config.get("selected_files", [])  # Archivos seleccionados
+    selected_files = config.get("selected_files", [])
 
     # verificar y crear carpeta temp en la ruta del script
     temp_folder = os.path.join(os.path.dirname(__file__), "temp")
-
-
+    
     # Validar carpetas
-    for folder in [input_folder, output_folder, excel_output_folder, temp_folder]:
-        if not os.path.exists(folder):
-            log(f"La carpeta '{folder}' no existe. Creándola...")
-            os.makedirs(folder)
-
+    folders = [input_folder, output_folder, excel_output_folder, str(temp_folder)]
+    if not setup_folders(folders, log):
+        log("ERROR: No se pudo configurar las carpetas necesarias. Abortando.", logging.ERROR)
+        return False
+    
     # Validar archivos seleccionados
     if not selected_files:
-        log("No se han seleccionado archivos para procesar.")
-        return
-
-    # Descomprimir archivos ZIP si está activado
+        log("ADVERTENCIA: No se han seleccionado archivos para procesar.", logging.WARNING)
+        return False
+    
+    log(f"Se procesarán {len(selected_files)} archivos")
+    
+    # Proceso por etapas
+    stages = []
+    
+    # Etapa 1: Descompresión de archivos ZIP
+    
     if descomprimir:
-        log("Descomprimiendo archivos ZIP...")
-        try:
-            decompress_zip_files(input_folder, temp_folder, selected_files)
-            log("Archivos ZIP descomprimidos correctamente.")
-        except Exception as e: 
-            log(f"Error al descomprimir archivos ZIP: {e}")
-            return
-
-    log("Procesando archivos TDMS...")
-    try:
-        procesar_archivos_tdms_paralelo(temp_folder)
-        log("Archivos TDMS procesados correctamente.")
-    except Exception as e:
-        log(f"Error al procesar archivos TDMS: {e}")
-        return
-
-    # Ordenar y agrupar archivos CSV por día
-    log("Ordenando y agrupando archivos CSV por día...")
-    try:
-        ordenar_y_agrupado_por_dia(temp_folder)
-        log("Archivos CSV ordenados y agrupados correctamente.")
-    except Exception as e:
-        log(f"Error al ordenar y agrupar archivos CSV: {e}")
-        return
-
-    # Convertir archivos CSV a MAT
-    log("Convirtiendo archivos CSV a MAT...")
-    try:
-        csv_to_mat(temp_folder, output_folder, unidad=unidad, procesar_incompleto=procesar_incompleto)
-        log("Archivos CSV convertidos a MAT correctamente.")
-    except Exception as e:
-        log(f"Error al convertir archivos CSV a MAT: {e}")
-        return
-
-    # Procesar archivos MAT con MATLAB si está activado
+        stages.append((
+            "Descompresión de archivos ZIP",
+            decompress_zip_files,
+            (input_folder, str(temp_folder), selected_files)
+        ))
+    
+        # Etapa 2: Procesamiento TDMS
+        stages.append((
+            "Procesamiento de archivos TDMS",
+            procesar_archivos_tdms_paralelo,
+            (str(temp_folder),)
+        ))
+        
+        # Etapa 3: Ordenamiento y agrupación CSV
+        stages.append((
+            "Ordenamiento y agrupación de archivos CSV",
+            ordenar_y_agrupado_por_dia,
+            (str(temp_folder),)
+        ))
+        
+        # Etapa 4: Conversión CSV a MAT
+        stages.append((
+            "Conversión de CSV a MAT",
+            csv_to_mat,
+            (str(temp_folder), output_folder, unidad, procesar_incompleto)
+        ))
+    
+    # Etapa 5: Procesamiento MAT con MATLAB (opcional)
     if rainflow:
-        log("Procesando archivos MAT con MATLAB...")
-        try:
-            process_mat_files(output_folder, config)
-            log("Archivos MAT procesados correctamente con MATLAB.")
-        except Exception as e:
-            log(f"Error al procesar archivos MAT con MATLAB: {e}")
-            return
-
-    # Conteo de ciclos de arranque y parada si está activado
+        stages.append((
+            "Procesamiento de archivos MAT con MATLAB",
+            process_mat_files,
+            (output_folder, config)
+        ))
+    
+    # Etapa 6: Conteo de ciclos (opcional)
     if realizar_conteo:
-        excel_path = os.path.join(excel_output_folder, "arranque_paradas.xlsx")
-        log("Realizando conteo de ciclos de arranque y parada...")
-        try:
-            process_mat_folder(output_folder, excel_path)
-            log("Conteo de ciclos de arranque y parada completado.")
-        except Exception as e:
-            log(f"Error al procesar el conteo de arranques y paradas: {e}")
-            return
+        excel_path = str(Path(excel_output_folder) / "arranque_paradas.xlsx")
+        stages.append((
+            "Conteo de ciclos de arranque y parada",
+            process_mat_folder,
+            (output_folder, excel_path, selected_files)
+        ))
+    
+    # Ejecutar etapas
+    success = True
+    for name, func, args in stages:
+        if not process_stage(name, func, args, log):
+            success = False
+            log(f"Proceso detenido debido a un error en la etapa: {name}", logging.ERROR)
+            break
+    
+    if success:
+        log("Proceso completado exitosamente.")
+    else:
+        log("El proceso no se completó correctamente. Revise los errores anteriores.", logging.ERROR)
+    
+    # Limpieza (opcional)
+    # cleanup_temp_files(temp_folder)
+    
+    return success
 
-    log("Proceso completado exitosamente.")
+
+if __name__ == "__main__":
+    # Código para ejecutar el script directamente para pruebas
+    test_config = load_config("config.json")
+    main(test_config)

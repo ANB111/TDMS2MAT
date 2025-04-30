@@ -1,7 +1,7 @@
 import os
 import subprocess
 import shutil
-from tqdm import tqdm
+
 
 def decompress_zip_files(input_folder, output_folder, selected_files):
     """
@@ -13,7 +13,7 @@ def decompress_zip_files(input_folder, output_folder, selected_files):
 
     os.makedirs(output_folder, exist_ok=True)
 
-    for zip_file in tqdm(selected_files, desc="Descomprimiendo archivos", unit="archivo"):
+    for zip_file in selected_files:
         zip_path = os.path.join(input_folder, zip_file)
         print(f"Procesando archivo: {zip_file}")
 

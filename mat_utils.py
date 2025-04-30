@@ -22,7 +22,7 @@ def csv_to_mat(input_folder, output_folder, unidad="05", procesar_incompleto=Fal
 
     # Verificar si la carpeta de entrada existe
     if not os.path.exists(input_folder):
-        log(f"❌ La carpeta de entrada '{input_folder}' no existe.")
+        log(f"La carpeta de entrada '{input_folder}' no existe.")
         return
 
     # Crear la carpeta de salida si no existe
@@ -35,7 +35,7 @@ def csv_to_mat(input_folder, output_folder, unidad="05", procesar_incompleto=Fal
         csv_files = [f for f in os.listdir(input_folder) if f.endswith('.csv') and "_temp" not in f]
 
     if not csv_files:
-        log(f"⚠️ No se encontraron archivos CSV en la carpeta '{input_folder}'.")
+        log(f"No se encontraron archivos CSV en la carpeta '{input_folder}'.")
         return
 
     # Procesar cada archivo CSV
@@ -58,13 +58,13 @@ def csv_to_mat(input_folder, output_folder, unidad="05", procesar_incompleto=Fal
 
             # Verificar si tiene la columna 'Time'
             if "Time" not in data.columns:
-                log(f"⚠️ Archivo '{csv_file}' omitido: no tiene columna 'Time'.")
+                log(f"Archivo '{csv_file}' omitido: no tiene columna 'Time'.")
                 continue
 
             # Convertir la columna de tiempo
             data["Time"] = pd.to_datetime(data["Time"], errors='coerce')
             if data["Time"].isnull().all():
-                log(f"⚠️ Archivo '{csv_file}' omitido: errores en la conversión de fechas.")
+                log(f"Archivo '{csv_file}' omitido: errores en la conversión de fechas.")
                 continue
 
             # Calcular epoch time
@@ -84,4 +84,4 @@ def csv_to_mat(input_folder, output_folder, unidad="05", procesar_incompleto=Fal
                 os.remove(input_file)
 
         except Exception as e:
-            log(f"❌ Error procesando '{csv_file}': {e}")
+            log(f"Error procesando '{csv_file}': {e}")
