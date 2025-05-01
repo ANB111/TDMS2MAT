@@ -43,7 +43,7 @@ def convertir_tdms_a_csv(archivo_tdms, carpeta_salida, log_callback=None):
         log(f"[TDMS2CSV] Error al convertir '{archivo_tdms}': {e}")
 
 
-def procesar_archivos_tdms_paralelo(carpeta_tdms, num_workers=4, log_callback=None, stop_event=None):
+def procesar_archivos_tdms_paralelo(carpeta_tdms, num_workers=14, log_callback=None, stop_event=None):
     def log(msg):
         if log_callback:
             log_callback(msg)

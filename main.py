@@ -187,7 +187,7 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
         stages.append((
             "Conteo de ciclos de arranque y parada",
             process_mat_folder,
-            (output_folder, excel_path, selected_files)
+            (output_folder, excel_path, log)
         ))
     
     # Ejecutar etapas
