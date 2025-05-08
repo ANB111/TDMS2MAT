@@ -18,9 +18,28 @@ COLUMN_ORDER = [
 datos_por_dia = defaultdict(list)
 datos_lock = threading.Lock()
 
+def detectar_delimitador_decimal(file):
+    try:
+        # Leer una pequeña muestra del archivo
+        sample = pd.read_csv(file, delimiter=";", nrows=5)
+        # Intentar convertir una columna numérica usando punto como decimal
+        for col in sample.columns:
+            if sample[col].dtype == object:  # Verificar si es texto
+                try:
+                    sample[col] = sample[col].str.replace(',', '.').astype(float)
+                    return '.'  # Si funciona, el delimitador es punto
+                except ValueError:
+                    continue
+        return ','  # Si no funciona, asumimos que es coma
+    except Exception as e:
+        print(f"Error detectando delimitador en {file}: {e}")
+        return ','  # Valor predeterminado
+
 def procesar_csv_individual(file):
     try:
-        for chunk in pd.read_csv(file, delimiter=";", decimal=",", parse_dates=['Time'], chunksize=10000):
+        # Detectar delimitador decimal
+        decimal_delimiter = detectar_delimitador_decimal(file)
+        for chunk in pd.read_csv(file, delimiter=";", decimal=decimal_delimiter, parse_dates=['Time'], chunksize=10000):
             chunk.sort_values(by='Time', inplace=True)
             chunk['Date'] = chunk['Time'].dt.date
 

@@ -7,3 +7,5 @@
 \__pycache__
 __pycache__/rainflow_lib.cpython-311.pyc
 __pycache__/rainflow.cpython-311.pyc
+#ignorar config.json
+\config.json
