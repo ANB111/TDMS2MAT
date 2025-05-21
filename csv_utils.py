@@ -44,6 +44,7 @@ def ordenar_y_agrupado_por_dia(input_folder, num_workers=14):
     # Combinar y guardar resultados por día
     for date, groups in tqdm(datos_por_dia.items(), desc="Concatenando archivos por día", unit="día"):
         daily_data = pd.concat(groups, ignore_index=True)
+        daily_data.sort_values(by='Time', inplace=True)
         daily_data.drop(columns=['Date'], inplace=True)
 
         # Reordenar columnas
