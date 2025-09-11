@@ -1,7 +1,20 @@
 import os
 import pandas as pd
 from scipy.io import loadmat
-from datetime import datetime
+
+def extract_numeric_key(filename):
+    """
+    Extrae una clave numérica de un nombre de archivo con formato '25.2.11-u05.mat'.
+    Devuelve una tupla de enteros para ordenar correctamente.
+    """
+    # Tomar la parte antes del primer '-'
+    base = filename.split('-')[0]
+    # Separar por '.' y convertir a enteros
+    try:
+        parts = tuple(int(p) for p in base.split('.'))
+    except Exception:
+        parts = (0,)
+    return parts
 
 def count_startups_shutdowns(mat_data):
     """
@@ -15,7 +28,7 @@ def count_startups_shutdowns(mat_data):
     """
     # Extraer los datos del canal 13 (velocidad de la turbina)
     try:
-        speed_data = mat_data['data'][:, 13]  # Asumimos que el canal 13 es el índice 13
+        speed_data = mat_data['data'][:, 13] 
     except IndexError:
         print("El archivo .mat no tiene datos en el canal 13.")
         return 0, 0, "Desconocido", "Desconocido"
@@ -60,45 +73,55 @@ def process_mat_folder(mat_folder, excel_path, log_callback=None):
         processed_files = set(df_excel["Archivo"])  # Conjunto de archivos ya procesados
     else:
         # Crear un DataFrame vacío si el archivo no existe
-        df_excel = pd.DataFrame(columns=["Fecha", "Arranques", "Paradas", "Total", "Estado Inicial", "Estado Final", "Archivo"])
+        df_excel = pd.DataFrame(columns=["Fecha", "Arranques", "Paradas", "Total", "Movimientos", "Estado Inicial", "Estado Final", "Archivo"])
         processed_files = set()
 
+    # Obtener y ordenar archivos .mat de forma numérica
+    mat_files = [f for f in os.listdir(mat_folder) if f.endswith('.mat')]
+    mat_files.sort(key=extract_numeric_key)
+
     # Procesar cada archivo .mat en la carpeta
-    for mat_file in os.listdir(mat_folder):
-        if not mat_file.endswith('.mat'):
-            continue
-
-        mat_path = os.path.join(mat_folder, mat_file)
-
+    for mat_file in mat_files:
         # Verificar si el archivo ya fue procesado
         if mat_file in processed_files:
             log(f"El archivo {mat_file} ya fue procesado. Saltando...")
             continue
 
+        mat_path = os.path.join(mat_folder, mat_file)
+
         try:
             # Cargar los datos del archivo .mat
             mat_data = loadmat(mat_path)
 
-            # Extraer la fecha del nombre del archivo (asumiendo formato YYYY.MM.DD-uXX.mat)
+            # Usar solo el nombre base sin el sufijo de la unidad ni extensión para la columna "Fecha"
+            # Ejemplo: de '25.2.11-u05.mat' -> '25.2.11'
             date_str = mat_file.split('-')[0]
-            date = datetime.strptime(date_str, "%Y.%m.%d").date()
 
             # Contar arranques, paradas y obtener estados inicial y final
             startups, shutdowns, estado_inicial, estado_final = count_startups_shutdowns(mat_data)
             total = startups + shutdowns
 
+            # Calcular movimientos del día (canal 8, índice 8)
+            try:
+                movimientos = mat_data['data'][-1, 7] - mat_data['data'][0, 7]
+
+            except Exception:
+                movimientos = None
+
             # Mostrar una previsualización en el log
             log(f"Procesado: {mat_file}")
-            log(f"  Fecha: {date}")
+            log(f"  Fecha: {date_str}")
             log(f"  Arranques: {startups}, Paradas: {shutdowns}, Total: {total}")
+            log(f"  Movimientos: {movimientos}")
             log(f"  Estado Inicial: {estado_inicial}, Estado Final: {estado_final}")
 
             # Agregar nueva fila al DataFrame
             new_row = {
-                "Fecha": date,
+                "Fecha": date_str,
                 "Arranques": startups,
                 "Paradas": shutdowns,
                 "Total": total,
+                "Movimientos": movimientos,
                 "Estado Inicial": estado_inicial,
                 "Estado Final": estado_final,
                 "Archivo": mat_file  # Registrar el nombre del archivo procesado

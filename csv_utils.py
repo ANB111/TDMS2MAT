@@ -57,12 +57,15 @@ def ordenar_y_agrupado_por_dia(input_folder, num_workers=14):
             remaining_cols = [col for col in current_columns if col not in ordered_cols]
             daily_data = daily_data[ordered_cols + remaining_cols]
 
-        output_file = os.path.join(input_folder, f"{date}.csv")
+        # Cambiar formato de nombre de archivo: 25.4.15-u05.csv
+        # Suponiendo que 'date' es un objeto datetime.date
+        date_str = f"{str(date.year)[-2:]}.{date.month}.{date.day}"
+        output_file = os.path.join(input_folder, f"{date_str}.csv")
         daily_data.to_csv(output_file, sep=";", decimal=",", index=False)
 
         # Verificación para crear _temp.csv si el día está incompleto
         last_time = daily_data['Time'].max()
-        temp_file = os.path.join(input_folder, f"{date}_temp.csv")
+        temp_file = os.path.join(input_folder, f"{date_str}_temp.csv")
 
         if pd.notnull(last_time) and last_time.hour == 23 and last_time.minute == 59 and last_time.second == 59:
             if os.path.exists(temp_file):

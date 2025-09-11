@@ -48,7 +48,8 @@ function procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_ch
     %— Rainflow con muestreo fs
     [cFs, ~, ~, ~, ~] = rainflow(Fza_Hid, fs);
     To = array2table(cFs, ...
-        'VariableNames', {'Ciclos','Rango','Media','ti','ts'});
+        'VariableNames', {'Ciclos','Rango [kN]','Media [kN]','ti [s]','ts [s]'});
+
 
     %— Filtrado ΔK en 3 umbrales
     dK_thr = [14, 10.5, 7];
@@ -67,9 +68,9 @@ function procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_ch
         outFile = fullfile(excelFolder, name + ".xlsx");
         writetable(To, outFile, 'Sheet','Conteo Rainflow','Range','A1');
         for k = 1:3
-            sheet = sprintf("deltaK_%g", dK_thr(k));
+            sheet = sprintf("delta K = %g", dK_thr(k));
             T = array2table(filtros{k}, ...
-                'VariableNames',[To.Properties.VariableNames,"deltaK"]);
+                'VariableNames', {'Ciclos','Rango [kN]','Media [kN]','ti [s]','ts [s]','delta K'});
             writetable(T, outFile, 'Sheet',sheet,'Range','A1');
         end
     end

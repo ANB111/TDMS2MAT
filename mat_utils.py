@@ -43,9 +43,13 @@ def csv_to_mat(input_folder, output_folder, unidad="05", procesar_incompleto=Fal
     for csv_file in tqdm(csv_files, desc="Convirtiendo archivos", unit="archivo"):
         output_name = csv_file.replace("_temp", "")
         input_file = os.path.join(input_folder, csv_file)
+        # Extraer solo la parte de la fecha (ej: 25.2.11 de 25.2.11.csv o 25.2.11-u05.csv)
+        base_name = os.path.splitext(output_name)[0]
+        # Si el nombre es tipo 25.2.11-u05, tomar solo la parte antes del primer guion
+        date_part = base_name.split('-')[0]
         output_file = os.path.join(
             output_folder,
-            f"{os.path.splitext(output_name)[0].replace('-', '.')}-u{unidad}.mat"
+            f"{date_part}-u{unidad}.mat"
         )
 
         try:

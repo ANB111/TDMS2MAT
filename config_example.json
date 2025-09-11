@@ -1,0 +1,19 @@
+{
+    "input_folder": "C:/Users/Becario 4/Documents/TDMS2MAT/entrada",
+    "output_folder": "C:/Users/Becario 4/Documents/TDMS2MAT/salida",
+    "excel_output_folder": "C:/Users/Becario 4/Documents/TDMS2MAT/salida_excels",
+    "last_processed": "Prueba.zip",
+    "ruta_matlab_script": "C:/Users/Becario 4/Documents/TDMS2MAT",
+    "matlab_path": "C:/Program Files/Polyspace/R2021a/bin/matlab.exe",
+    "FS": 10,
+    "descomprimir": true,
+    "n_channels": 16,
+    "unidad": "05",
+    "procesar_incompleto": true,
+    "rainflow": true,
+    "realizar_conteo": true,
+    "graficos_matlab": false,
+    "selected_files": [
+        "Prueba.zip"
+    ]
+}
