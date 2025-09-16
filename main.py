@@ -11,7 +11,11 @@ from tdms_utils import procesar_archivos_tdms_paralelo
 from csv_utils import ordenar_y_agrupado_por_dia
 from mat_utils import csv_to_mat
 from matlab_utils import process_mat_files
+
 from startup_shutdown_counter import process_mat_folder
+# Importar el script de concatenación
+import importlib.util
+import sys
 
 
 class ProcessingError(Exception):
@@ -76,7 +80,7 @@ def process_stage(name: str, func: Callable, args: tuple,
         return False
 
 
-def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] = None) -> bool:
+def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] = None, confirm_continue_func: Optional[Callable[[str], bool]] = None, prompt_func: Optional[Callable] = None) -> bool:
     """
     Función principal de procesamiento con manejo mejorado de errores y configuración.
     
@@ -106,7 +110,8 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    log(f"Iniciando procesamiento con configuración: {config}", logging.DEBUG)
+    #log(f"Iniciando procesamiento con configuración: {config}", logging.DEBUG)
+    log(f"----- Iniciando procesamiento -----", logging.DEBUG)
     
     # Validar configuración
     if not validate_config(config):
@@ -123,6 +128,7 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
     descomprimir = config.get('descomprimir', False)
     rainflow = config.get('rainflow', False)
     selected_files = config.get("selected_files", [])
+    concatenar_excels = config.get("concatenar_excels", False)
 
     # verificar y crear carpeta temp en la ruta del script
     temp_folder = os.path.join(os.path.dirname(__file__), "temp")
@@ -142,37 +148,33 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
     
     # Proceso por etapas
     stages = []
-    
+
     # Etapa 1: Descompresión de archivos ZIP
-    
     if descomprimir:
         stages.append((
             "Descompresión de archivos ZIP",
             decompress_zip_files,
             (input_folder, str(temp_folder), selected_files)
         ))
-    
         # Etapa 2: Procesamiento TDMS
         stages.append((
             "Procesamiento de archivos TDMS",
             procesar_archivos_tdms_paralelo,
             (str(temp_folder),)
         ))
-        
         # Etapa 3: Ordenamiento y agrupación CSV
         stages.append((
             "Ordenamiento y agrupación de archivos CSV",
             ordenar_y_agrupado_por_dia,
             (str(temp_folder),)
         ))
-        
-        # Etapa 4: Conversión CSV a MAT
+        # Etapa 4: Conversión de CSV a MAT
         stages.append((
             "Conversión de CSV a MAT",
             csv_to_mat,
             (str(temp_folder), output_folder, unidad, procesar_incompleto)
         ))
-    
+
     # Etapa 5: Procesamiento MAT con MATLAB (opcional)
     if rainflow:
         stages.append((
@@ -180,7 +182,7 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
             process_mat_files,
             (output_folder, config)
         ))
-    
+
     # Etapa 6: Conteo de ciclos (opcional)
     if realizar_conteo:
         excel_path = str(Path(excel_output_folder) / "arranque_paradas.xlsx")
@@ -188,6 +190,36 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
             "Conteo de ciclos de arranque y parada",
             process_mat_folder,
             (output_folder, excel_path, log)
+        ))
+
+    # Etapa 7: Concatenar excels (opcional)
+    if concatenar_excels:
+        def run_concat_excels():
+            concat_path = os.path.join(excel_output_folder, "concat_excels.py")
+            if not os.path.exists(concat_path):
+                concat_path = os.path.join(os.path.dirname(__file__), "concat_excels.py")
+            if not os.path.exists(concat_path):
+                raise FileNotFoundError("No se encontró concat_excels.py para concatenar excels.")
+            spec = importlib.util.spec_from_file_location("concat_excels", concat_path)
+            concat_module = importlib.util.module_from_spec(spec)
+            sys.modules["concat_excels"] = concat_module
+            spec.loader.exec_module(concat_module)
+            concat_file = os.path.join(excel_output_folder, "concatenado.xlsx")
+            # Pasar confirm_continue_func y prompt_func si están disponibles
+            if hasattr(concat_module, 'concat_excels'):
+                concat_module.concat_excels(
+                    excel_output_folder,
+                    concat_file,
+                    prompt_func=prompt_func,
+                    confirm_continue_func=confirm_continue_func,
+                    log_func=log
+                )
+            else:
+                raise Exception("No se encontró la función concat_excels en el módulo.")
+        stages.append((
+            "Concatenación de excels de salida",
+            run_concat_excels,
+            ()
         ))
     
     # Ejecutar etapas
@@ -197,19 +229,19 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
             success = False
             log(f"Proceso detenido debido a un error en la etapa: {name}", logging.ERROR)
             break
-    
+
     if success:
-        log("Proceso completado exitosamente.")
+        log("----- Proceso completado exitosamente -----", logging.INFO)
     else:
         log("El proceso no se completó correctamente. Revise los errores anteriores.", logging.ERROR)
-    
+
     # Limpieza (opcional)
     # cleanup_temp_files(temp_folder)
-    
+
     return success
 
 
 if __name__ == "__main__":
-    # Código para ejecutar el script directamente para pruebas
+    # Cargar configuración desde archivo JSON
     test_config = load_config("config.json")
     main(test_config)

@@ -9,6 +9,57 @@ from main import main  # Tu función principal
 CONFIG_FILE = "config.json"
 
 class App:
+    def prompt_start_date(self, min_date, max_date):
+        import tkinter.simpledialog as sd
+        # min_date y max_date pueden ser tuplas (anio, mes, dia) o datetime
+        def date_to_str(d):
+            if isinstance(d, tuple):
+                return f"{d[0]}.{d[1]}.{d[2]}"
+            else:
+                return d.strftime("%Y-%m-%d")
+        while True:
+            prompt = (
+                "Ingrese la fecha desde la que desea concatenar "
+                "(formato: YYYY-MM-DD o 25.7.1).\n"
+                f"Rango disponible: {date_to_str(min_date)} a {date_to_str(max_date)}"
+            )
+            date_str = sd.askstring("Fecha de inicio", prompt, parent=self.root)
+            if date_str is None:
+                raise Exception("Operación cancelada por el usuario.")
+            from datetime import datetime
+            # Intentar ambos formatos
+            parsed = None
+            try:
+                date = datetime.strptime(date_str, "%Y-%m-%d")
+                parsed = (date.year-2000, date.month, date.day)
+            except Exception:
+                try:
+                    parts = date_str.strip().split('.')
+                    if len(parts) == 3:
+                        y, m, d = map(int, parts)
+                        parsed = (y, m, d)
+                except Exception:
+                    pass
+            if not parsed:
+                messagebox.showerror("Error", "Formato de fecha inválido. Use YYYY-MM-DD o 25.7.1.")
+                continue
+            # Validar rango
+            if isinstance(min_date, tuple):
+                min_date_dt = datetime(year=2000+min_date[0], month=min_date[1], day=min_date[2])
+            else:
+                min_date_dt = min_date
+            if isinstance(max_date, tuple):
+                max_date_dt = datetime(year=2000+max_date[0], month=max_date[1], day=max_date[2])
+            else:
+                max_date_dt = max_date
+            parsed_dt = datetime(year=2000+parsed[0], month=parsed[1], day=parsed[2])
+            if parsed_dt < min_date_dt:
+                messagebox.showinfo("Info", f"La fecha ingresada es anterior al archivo más antiguo. Se usará {date_to_str(min_date)}.")
+                return min_date
+            elif parsed_dt > max_date_dt:
+                messagebox.showerror("Error", "La fecha ingresada es posterior al archivo más reciente.")
+            else:
+                return parsed
     def __init__(self, root):
         self.root = root
         self.root.title("Procesador de Archivos TDMS")
@@ -33,6 +84,7 @@ class App:
             "procesar_incompleto": BooleanVar(value=False),
             "rainflow": BooleanVar(value=False),
             "realizar_conteo": BooleanVar(value=False),
+            "concatenar_excels": BooleanVar(value=False),
             "graficos_matlab": BooleanVar(value=False)
         }
 
@@ -140,17 +192,53 @@ class App:
             messagebox.showerror("Error", "No hay archivos para procesar.")
             return
 
+        # --- Lógica robusta para pedir fecha de inicio en el hilo principal ---
+        prompt_start_date_value = None
+        if self.config["concatenar_excels"].get():
+            import os
+            excel_folder = self.config["excel_output_folder"].get()
+            concat_file = os.path.join(excel_folder, "concatenado.xlsx")
+            if not os.path.exists(concat_file):
+                # Buscar archivos .xlsx válidos
+                from concat_excels import extract_date_from_filename
+                all_files = [(extract_date_from_filename(f), f) for f in os.listdir(excel_folder) if f.endswith(".xlsx") and not f.startswith("~$")]
+                all_files = [(d, f) for d, f in all_files if d]
+                if all_files:
+                    all_files.sort()
+                    min_date, max_date = all_files[0][0], all_files[-1][0]
+                    try:
+                        prompt_start_date_value = self.prompt_start_date(min_date, max_date)
+                    except Exception as e:
+                        messagebox.showerror("Cancelado", str(e))
+                        return
+                else:
+                    messagebox.showerror("Error", "No hay archivos Excel válidos para concatenar.")
+                    return
+
         self.save_config()
         self.stop_event.clear()
         self.progress.start()
         self.log_text.delete("1.0","end")
-        Thread(target=self._run, daemon=True).start()
+        Thread(target=self._run, args=(prompt_start_date_value,), daemon=True).start()
 
-    def _run(self):
+    def _run(self, prompt_start_date_value=None):
         cfg = {k:v.get() for k,v in self.config.items()}
         cfg["selected_files"] = self.selected_files
+
+        # Función de confirmación para saltos de días
+        def confirm_continue_func(msg):
+            return messagebox.askyesno("Salto de días detectado", msg + "\n¿Desea continuar?")
+
+        # Función de prompt para pasar la fecha ya seleccionada
+        def prompt_func(min_date, max_date):
+            return prompt_start_date_value
+
         try:
-            main(cfg, log_callback=self.log_message)
+            # Pasar la función de confirmación y prompt al main si la opción de concatenar excels está activa
+            if cfg.get("concatenar_excels", False):
+                main(cfg, log_callback=self.log_message, confirm_continue_func=confirm_continue_func, prompt_func=prompt_func)
+            else:
+                main(cfg, log_callback=self.log_message)
             # al terminar, guarda el último
             if self.selected_files:
                 last = self.selected_files[-1]
@@ -245,6 +333,7 @@ class App:
         ttk.Checkbutton(pf2,text="Gráficos MATLAB",variable=self.config["graficos_matlab"],bootstyle="round-toggle").grid(row=1,column=2,sticky="w",pady=2)
         ttk.Checkbutton(pf2,text="Rainflow",variable=self.config["rainflow"],bootstyle="round-toggle").grid(row=2,column=0,sticky="w",pady=2)
         ttk.Checkbutton(pf2,text="Conteo Arranques/Paradas",variable=self.config["realizar_conteo"],bootstyle="round-toggle").grid(row=2,column=1,sticky="w",pady=2)
+        ttk.Checkbutton(pf2,text="Concatenar Excels",variable=self.config["concatenar_excels"],bootstyle="round-toggle").grid(row=2,column=2,sticky="w",pady=2)
 
         # Log
         lf = ttk.Labelframe(mf, text="Registro", padding=10)

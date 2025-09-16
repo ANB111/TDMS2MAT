@@ -92,9 +92,7 @@ def process_mat_folder(mat_folder, excel_path, log_callback=None):
         try:
             # Cargar los datos del archivo .mat
             mat_data = loadmat(mat_path)
-
-            # Usar solo el nombre base sin el sufijo de la unidad ni extensión para la columna "Fecha"
-            # Ejemplo: de '25.2.11-u05.mat' -> '25.2.11'
+            # Extraer la fecha del nombre del archivo
             date_str = mat_file.split('-')[0]
 
             # Contar arranques, paradas y obtener estados inicial y final

@@ -52,15 +52,56 @@ function procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_ch
 
 
     %— Filtrado ΔK en 3 umbrales
+    K = [65.12307378 57.01521195 42.83250569 27.55061352 14.93805445 7.055368592 3.505949635 2.470266626 2.331041354]';
+    F = [1782 1560 1337 1114 891 668 446 223 100]';
+    pp = spline(F, K);
+
     dK_thr = [14, 10.5, 7];
-    diffs  = (cFs(:,3)+cFs(:,2)/2) - (cFs(:,3)-cFs(:,2)/2);
+
+    % Preparo variables
+    nCols = size(cFs,2);
+    if nCols == 0
+        nCols = 5; % seguridad (esperamos 5 columnas en cFs: Ciclos,Rango,Media,ti,ts)
+    end
+
+    % Si cFs está vacío, genero filas vacías para cada filtro
     filtros = cell(1,3);
-    for k = 1:3
-        sel = [cFs(diffs>=dK_thr(k),:) diffs(diffs>=dK_thr(k))];
-        if isempty(sel)
-            sel = zeros(1,size(cFs,2)+1);
+    if isempty(cFs)
+        for k = 1:3
+            filtros{k} = zeros(1, nCols + 1); % fila de ceros con columna extra delta K
         end
-        filtros{k} = sel;
+    else
+        % Vectorizo cálculo de f_i y f_s
+        medias = cFs(:,3);
+        rangos = cFs(:,2);
+        f_i = medias - rangos/2;   % fuerza mínima
+        f_s = medias + rangos/2;   % fuerza máxima
+
+        % Evaluar K en f_i y f_s, cuidando f < 0
+        k_i = zeros(size(f_i));
+        k_s = zeros(size(f_s));
+
+        pos_i = f_i > 0;
+        if any(pos_i)
+            % Usamos ppval (igual que tu script original). Alternativa: interp1(...,'pchip','extrap')
+            k_i(pos_i) = ppval(pp, f_i(pos_i));
+        end
+        pos_s = f_s > 0;
+        if any(pos_s)
+            k_s(pos_s) = ppval(pp, f_s(pos_s));
+        end
+
+        dK_vals = k_s - k_i; % ΔK para cada ciclo
+
+        % Construyo las tablas filtradas (añadiendo la columna delta K)
+        for k = 1:3
+            idx_sel = dK_vals >= dK_thr(k);
+            sel = [cFs(idx_sel, :) dK_vals(idx_sel)];
+            if isempty(sel)
+                sel = zeros(1, nCols + 1);
+            end
+            filtros{k} = sel;
+        end
     end
 
     %— Escritura Excel
