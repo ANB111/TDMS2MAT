@@ -13,6 +13,7 @@
     "rainflow": true,
     "realizar_conteo": true,
     "graficos_matlab": false,
+    "concatenar_excels": true,
     "selected_files": [
         "Prueba.zip"
     ]

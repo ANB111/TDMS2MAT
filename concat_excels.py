@@ -152,29 +152,56 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, log_func=print, c
             for sheet in xls.sheet_names:
                 if sheet.startswith("delta K"):
                     df = xls.parse(sheet)
+                    # Insertar columna 'Fecha' al inicio, solo la primera fila con la fecha, el resto vacío
+                    fecha_col = [fecha_str] + [None]*(len(df)-1)
+                    df.insert(0, 'Fecha', fecha_col)
                     if sheet not in delta_sheets:
                         delta_sheets[sheet] = []
-                    delta_sheets[sheet].append(df)
+                    delta_sheets[sheet].append((df, ciclo == 0))  # Guardar si es ciclo 0 para formato
             ciclo += 1
         except Exception as e:
             log_func(f"Error procesando {ruta}: {e}")
 
     # Escribir al archivo concatenado
+    from openpyxl.styles import Font
     if os.path.exists(concat_file):
         with pd.ExcelWriter(concat_file, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
             # Hoja archivo
             df_archivo = pd.DataFrame(archivo_rows, columns=["", "Fecha", "Archivo", "Dirección Almacenamiento"])
             df_archivo.to_excel(writer, sheet_name="archivo", index=False, header=False, startrow=writer.sheets["archivo"].max_row)
-            # Hojas delta (sin columnas extra)
+            # Hojas delta (con columna Fecha)
             for sheet, dfs in delta_sheets.items():
-                df = pd.concat(dfs, ignore_index=True)
-                df.to_excel(writer, sheet_name=sheet, index=False, header=False, startrow=writer.sheets[sheet].max_row)
+                df_list = [df for df, _ in dfs]
+                df = pd.concat(df_list, ignore_index=True)
+                startrow = writer.sheets[sheet].max_row
+                df.to_excel(writer, sheet_name=sheet, index=False, header=False, startrow=startrow)
+        # Formato negrita y subrayado para la celda de fecha si ciclo==0
+        wb = load_workbook(concat_file)
+        for sheet, dfs in delta_sheets.items():
+            ws = wb[sheet]
+            row_offset = ws.max_row - sum(len(df) for df, _ in dfs) + 1
+            for df, is_ciclo0 in dfs:
+                if is_ciclo0:
+                    ws[f'A{row_offset}'].font = Font(bold=True, underline="single")
+                row_offset += len(df)
+        wb.save(concat_file)
     else:
         with pd.ExcelWriter(concat_file, engine="openpyxl") as writer:
             pd.DataFrame(archivo_rows, columns=["", "Fecha", "Archivo", "Dirección Almacenamiento"]).to_excel(writer, sheet_name="archivo", index=False)
             for sheet, dfs in delta_sheets.items():
-                df = pd.concat(dfs, ignore_index=True)
+                df_list = [df for df, _ in dfs]
+                df = pd.concat(df_list, ignore_index=True)
                 df.to_excel(writer, sheet_name=sheet, index=False)
+        # Formato negrita y subrayado para la celda de fecha si ciclo==0
+        wb = load_workbook(concat_file)
+        for sheet, dfs in delta_sheets.items():
+            ws = wb[sheet]
+            row_offset = 2  # 1-based, primera fila después del header
+            for df, is_ciclo0 in dfs:
+                if is_ciclo0:
+                    ws[f'A{row_offset}'].font = Font(bold=True, underline="single")
+                row_offset += len(df)
+        wb.save(concat_file)
     log_func(f"Concatenación completada. Archivos agregados: {len(files)}")
 
 if __name__ == "__main__":
