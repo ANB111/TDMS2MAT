@@ -244,16 +244,31 @@ class App:
         self.log_text.delete("1.0","end")
         Thread(target=self._run, daemon=True).start()
 
+    def run_on_main_thread(self, func, *args):
+        from queue import Queue
+        q = Queue()
+        def wrapper():
+            try:
+                result = func(*args)
+                q.put(result)
+            except Exception as e:
+                q.put(e)
+        self.root.after(0, wrapper)
+        result = q.get()
+        if isinstance(result, Exception):
+            raise result
+        return result
+
     def _run(self):
         cfg = {k:v.get() for k,v in self.config.items()}
         cfg["selected_files"] = self.selected_files
 
         def confirm_continue_func(msg):
-            return messagebox.askyesno("Salto de días detectado", msg + "\n¿Desea continuar?")
+            return self.run_on_main_thread(messagebox.askyesno, "Salto de días detectado", msg + "\n¿Desea continuar?")
 
         def prompt_func(min_date, max_date):
             try:
-                return self.prompt_start_date(min_date, max_date)
+                return self.run_on_main_thread(self.prompt_start_date, min_date, max_date)
             except Exception as e:
                 self.log_message(f"Operación cancelada: {e}")
                 return None

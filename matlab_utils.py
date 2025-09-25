@@ -4,6 +4,7 @@ import logging
 import platform
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
+from tqdm import tqdm
 
 # Configurar logging
 logging.basicConfig(
@@ -94,7 +95,6 @@ def run_matlab_script(name: str, config: Dict[str, Any], show_output: bool = Fal
         ruta_guardado_graficos=ruta_guardado_graficos,
     )
 
-    log(f"[MATLAB] Ejecutando '{name}'", "info", log_callback)
 
     if show_output:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -122,19 +122,14 @@ def process_mat_files(output_folder: str, config: Dict[str, Any], log_callback: 
         log(f"No se encontraron archivos .mat en {output_folder}", "warning", log_callback)
         return
 
-    log(f"Procesando {len(files)} archivos MAT con MATLAB...", "info", log_callback)
     failed = []
     show_output = config.get("mostrar_salida_matlab", False)
 
-    for mat_file in files:
+    for mat_file in tqdm(files, desc="Procesando archivos .mat"):
         name = Path(mat_file).stem
         expected_excel = Path(config["excel_output_folder"]) / f"{name}.xlsx"
 
-        if expected_excel.exists():
-            log(f"[MATLAB] Saltando '{name}': Excel ya existe.", "info", log_callback)
-            continue
 
-        log(f"[MATLAB] Procesando '{name}'...", "info", log_callback)
         try:
             run_matlab_script(name, config, show_output, log_callback)
         except Exception as e:
@@ -155,7 +150,6 @@ def obtener_script_path(config: Dict[str, Any], log_callback: Optional[Callable]
         config_path = os.path.abspath(config_path)
         script_en_config = os.path.join(config_path, matlab_script_name)
         if os.path.isdir(config_path) and os.path.isfile(script_en_config):
-            log(f"Usando script MATLAB desde: {config_path}", "info", log_callback)
             return config_path
         else:
             log(f"No se encontró '{matlab_script_name}' en ruta proporcionada: {config_path}", "warning", log_callback)

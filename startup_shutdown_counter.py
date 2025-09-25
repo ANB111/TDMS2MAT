@@ -106,12 +106,6 @@ def process_mat_folder(mat_folder, excel_path, log_callback=None):
             except Exception:
                 movimientos = None
 
-            # Mostrar una previsualización en el log
-            log(f"Procesado: {mat_file}")
-            log(f"  Fecha: {date_str}")
-            log(f"  Arranques: {startups}, Paradas: {shutdowns}, Total: {total}")
-            log(f"  Movimientos: {movimientos}")
-            log(f"  Estado Inicial: {estado_inicial}, Estado Final: {estado_final}")
 
             # Agregar nueva fila al DataFrame
             new_row = {
