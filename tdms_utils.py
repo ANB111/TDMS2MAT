@@ -1,4 +1,5 @@
 import os
+import sys
 from nptdms import TdmsFile
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,7 +36,6 @@ def convertir_tdms_a_csv(archivo_tdms, carpeta_salida, log_callback=None):
             archivo_tdms_index = archivo_tdms + '_index'
             if os.path.exists(archivo_tdms_index):
                 os.remove(archivo_tdms_index)
-            log(f"[TDMS2CSV] Convertido y eliminado: {os.path.basename(archivo_tdms)}")
         else:
             log(f"[TDMS2CSV] Error: No se creó el archivo CSV {ruta_archivo_csv}. TDMS no eliminado.")
 
@@ -66,9 +66,8 @@ def procesar_archivos_tdms_paralelo(carpeta_tdms, num_workers=14, log_callback=N
         log(f"[TDMS2CSV] No se encontraron archivos TDMS en '{carpeta_tdms}'.")
         return
 
-    log(f"[TDMS2CSV] Procesando {len(archivos_tdms)} archivo(s) TDMS...")
 
-    with tqdm(total=len(archivos_tdms), desc="Procesando archivos TDMS", unit="archivo") as barra:
+    with tqdm(total=len(archivos_tdms), desc="Procesando archivos TDMS", unit="archivo", disable=not sys.stdout.isatty()) as barra:
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futuros = {
                 executor.submit(convertir_tdms_a_csv, archivo, carpeta_tdms, log_callback): archivo
