@@ -1,7 +1,7 @@
-function procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_channels)
+function procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_channels, ruta_guardado_graficos)
 % procesar_matlab  Procesa un .MAT y produce tablas Excel y (opcionalmente) gráficos.
 %
-%   procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_channels)
+%   procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_channels, ruta_guardado_graficos)
 %
 %   - matFilePath: ruta completa al archivo .mat que contiene la variable `data`.
 %   - excelFolder: carpeta donde se guardarán los .xlsx.
@@ -9,6 +9,7 @@ function procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_ch
 %   - escritura:   true para escribir tablas Excel.
 %   - fs:          frecuencia de muestreo en Hz.
 %   - n_channels:  número de canales (actualmente no usado, pero disponible).
+%   - ruta_guardado_graficos: carpeta donde se guardarán los gráficos.
 
     %— Validaciones iniciales
     assert(isfile(matFilePath), "No existe el .MAT: %s", matFilePath);
@@ -34,6 +35,7 @@ function procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_ch
     Fza_Hid = (u(:,7)*A_c - u(:,6)*A_a)*(100/5);
     N = size(Fza_Hid,1);
     t = (0:N-1)'/fs;
+    t_horas = t / 3600;
 
     %— Conteo rainflow básico
     [c, ~, rmr, ~, idx] = rainflow(Fza_Hid);
@@ -118,40 +120,77 @@ function procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_ch
 
     %— Gráficos opcionales
     if graficos
-        % 1. Posición de álabes
+        % Extraer fecha y unidad del nombre del archivo
+        parts = split(name, '-');
+        date_str = parts{1};
+        unit_str = '';
+        if numel(parts) > 1
+            unit_str = parts{2};
+        end
+
+        % Tipos de gráficos a generar
+        graph_types = {'Movimientos', 'Potencia', 'Movimiento alabes', 'Fuerza hidraulica'};
+
+        % 1. Movimientos
+        hFig = figure('Visible', 'off');
+        plot(t_horas, u(:,8));
+        title('Movimientos');
+        xlabel('Tiempo (horas)');
+        ylabel('Contador');
+        xlim([0 24]);
+        xticks(0:2:24);
+        grid on;
+        if ~isempty(ruta_guardado_graficos)
+            filename = sprintf('%s-%s-%s.png', date_str, unit_str, graph_types{1});
+            saveas(hFig, fullfile(ruta_guardado_graficos, filename));
+        end
+        close(hFig);
+
+        % 2. Potencia
+        hFig = figure('Visible', 'off');
+        plot(t_horas, u(:,1));
+        title('Potencia');
+        xlabel('Tiempo (horas)');
+        ylabel('Potencia (MW)');
+        xlim([0 24]);
+        xticks(0:2:24);
+        grid on;
+        if ~isempty(ruta_guardado_graficos)
+            filename = sprintf('%s-%s-%s.png', date_str, unit_str, graph_types{2});
+            saveas(hFig, fullfile(ruta_guardado_graficos, filename));
+        end
+        close(hFig);
+
+        % 3. Movimiento alabes
         Pos = u(:,3)*((37-10)/100);
-        figure; plot(t,Pos,'LineWidth',1.2);
-        xlabel('Tiempo (s)'); ylabel('Álabes (°)');
-        title('Posición de Álabes');
+        hFig = figure('Visible', 'off');
+        plot(t_horas, Pos, 'LineWidth', 1.2);
+        title('Movimiento alabes');
+        xlabel('Tiempo (horas)');
+        ylabel('Álabes (°)');
+        xlim([0 24]);
+        xticks(0:2:24);
+        grid on;
+        if ~isempty(ruta_guardado_graficos)
+            filename = sprintf('%s-%s-%s.png', date_str, unit_str, graph_types{3});
+            saveas(hFig, fullfile(ruta_guardado_graficos, filename));
+        end
+        close(hFig);
 
-        % 2. Potencia vs posición
-        figure;
-        yyaxis left;  plot(t,u(:,1)); ylabel('MW');
-        yyaxis right; plot(t,Pos);    ylabel('°');
-        title('Potencia y Posición de Álabes');
-
-        % 3. Potencia y ΔP
-        figure; hold on;
-        yyaxis left;  plot(t,u(:,1)); ylabel('MW');
-        yyaxis right;
-        plot(t,dP,'-', t,lim_sup*ones(N,1),'--r', t,lim_inf*ones(N,1),'--b');
-        ylabel('ΔP (bar)');
-        title('Potencia y Delta Presión');
-        legend('Potencia','ΔP','Lím Sup','Lím Inf');
-
-        % 4. Picos rainflow
-        figure; plot(t_peaks,Fza_peaks,'o');
-        xlabel('Tiempo (s)'); ylabel('Pico Fza (kN)');
-        title('Picos Rainflow');
-
-        % 5. Curva K
-        K = [65.1231 57.0152 42.8325 27.5506 14.9381 7.0554 3.5059 2.4703 2.3310]';
-        F = [1782 1560 1337 1114 891 668 446 223 100]';
-        pp = spline(F,K);
-        ff = linspace(min(F),max(F),200);
-        figure; plot(ff,ppval(pp,ff),F,K,'*r');
-        xlabel('Fuerza (kN)'); ylabel('Factor K (MPa·m^{1/2})');
-        title('Curva Factor K');
+        % 4. Fuerza hidraulica
+        hFig = figure('Visible', 'off');
+        plot(t_horas, Fza_Hid);
+        title('Fuerza hidraulica');
+        xlabel('Tiempo (horas)');
+        ylabel('Fuerza (kN)');
+        xlim([0 24]);
+        xticks(0:2:24);
+        grid on;
+        if ~isempty(ruta_guardado_graficos)
+            filename = sprintf('%s-%s-%s.png', date_str, unit_str, graph_types{4});
+            saveas(hFig, fullfile(ruta_guardado_graficos, filename));
+        end
+        close(hFig);
     end
 
     %— Mensaje final

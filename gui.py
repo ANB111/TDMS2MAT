@@ -4,45 +4,57 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from tkinter import filedialog, messagebox, StringVar, IntVar, BooleanVar, Listbox, END
 from threading import Thread, Event
-from main import main  # Tu función principal
+from main import main
+import logging
 
 CONFIG_FILE = "config.json"
 
 class App:
     def prompt_start_date(self, min_date, max_date):
         import tkinter.simpledialog as sd
+        from datetime import datetime
+
         # min_date y max_date pueden ser tuplas (anio, mes, dia) o datetime
         def date_to_str(d):
             if isinstance(d, tuple):
+                # d es (y, m, d)
                 return f"{d[0]}.{d[1]}.{d[2]}"
             else:
-                return d.strftime("%Y-%m-%d")
+                # d es datetime
+                return d.strftime("%y.%m.%d")
+        
         while True:
             prompt = (
                 "Ingrese la fecha desde la que desea concatenar "
-                "(formato: YYYY-MM-DD o 25.7.1).\n"
+                "(formato: AA.MM.DD, ej: 25.7.15).\n"
                 f"Rango disponible: {date_to_str(min_date)} a {date_to_str(max_date)}"
             )
             date_str = sd.askstring("Fecha de inicio", prompt, parent=self.root)
             if date_str is None:
                 raise Exception("Operación cancelada por el usuario.")
-            from datetime import datetime
-            # Intentar ambos formatos
+            
             parsed = None
             try:
-                date = datetime.strptime(date_str, "%Y-%m-%d")
-                parsed = (date.year-2000, date.month, date.day)
-            except Exception:
-                try:
-                    parts = date_str.strip().split('.')
-                    if len(parts) == 3:
-                        y, m, d = map(int, parts)
-                        parsed = (y, m, d)
-                except Exception:
-                    pass
+                # Priorizar formato AA.MM.DD
+                parts = date_str.strip().split('.')
+                if len(parts) == 3:
+                    y, m, d = map(int, parts)
+                    parsed = (y, m, d)
+            except (ValueError, TypeError):
+                pass
+
             if not parsed:
-                messagebox.showerror("Error", "Formato de fecha inválido. Use YYYY-MM-DD o 25.7.1.")
+                try:
+                    # Intentar formato alternativo YYYY-MM-DD
+                    date = datetime.strptime(date_str, "%Y-%m-%d")
+                    parsed = (date.year-2000, date.month, date.day)
+                except (ValueError, TypeError):
+                    pass
+
+            if not parsed:
+                messagebox.showerror("Error", "Formato de fecha inválido. Use AA.MM.DD (ej: 25.7.15)")
                 continue
+
             # Validar rango
             if isinstance(min_date, tuple):
                 min_date_dt = datetime(year=2000+min_date[0], month=min_date[1], day=min_date[2])
@@ -52,10 +64,15 @@ class App:
                 max_date_dt = datetime(year=2000+max_date[0], month=max_date[1], day=max_date[2])
             else:
                 max_date_dt = max_date
+            
             parsed_dt = datetime(year=2000+parsed[0], month=parsed[1], day=parsed[2])
+
             if parsed_dt < min_date_dt:
                 messagebox.showinfo("Info", f"La fecha ingresada es anterior al archivo más antiguo. Se usará {date_to_str(min_date)}.")
-                return min_date
+                if isinstance(min_date, datetime):
+                    return (min_date.year-2000, min_date.month, min_date.day)
+                else:
+                    return min_date
             elif parsed_dt > max_date_dt:
                 messagebox.showerror("Error", "La fecha ingresada es posterior al archivo más reciente.")
             else:
@@ -65,6 +82,10 @@ class App:
         self.root.title("Procesador de Archivos TDMS")
         self.root.geometry("1000x950")
         self.root.resizable(True, True)
+
+        # Configurar logging
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+        self.logger = logging.getLogger(__name__)
 
         # Flag para “desde último”
         self.use_last = BooleanVar(value=False)
@@ -77,6 +98,7 @@ class App:
             "last_processed": StringVar(value=""),
             "ruta_matlab_script": StringVar(),
             "matlab_path": StringVar(),
+            "ruta_guardado_graficos": StringVar(),
             "FS": IntVar(value=10),
             "descomprimir": BooleanVar(value=True),
             "n_channels": IntVar(value=16),
@@ -93,6 +115,17 @@ class App:
 
         self.load_config()
         self.create_widgets()
+        self.toggle_processing_options()
+
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def on_closing(self):
+        if messagebox.askokcancel("Salir", "¿Desea salir de la aplicación?"):
+            self.stop_event.set() # Signal the background thread to stop
+            # Optionally, wait for the thread to finish if it's not a daemon thread
+            # if self.processing_thread and self.processing_thread.is_alive():
+            #     self.processing_thread.join()
+            self.root.destroy()
 
     def create_labeled_entry(self, parent, text, key, row, col):
         frame = ttk.Frame(parent)
@@ -116,6 +149,19 @@ class App:
                 self.config[key].set(d)
                 if key=="input_folder":
                     self.refresh_files()
+        ttk.Button(frame, text="...", command=sel, bootstyle="secondary").grid(row=0, column=2, padx=5)
+        frame.columnconfigure(1, weight=1)
+
+    def create_file_input(self, parent, text, key, row, filetypes):
+        frame = ttk.Frame(parent)
+        frame.grid(row=row, column=0, columnspan=3, pady=2, sticky="ew")
+        ttk.Label(frame, text=text).grid(row=0, column=0, padx=5, sticky="w")
+        entry = ttk.Entry(frame, textvariable=self.config[key], width=40)
+        entry.grid(row=0, column=1, sticky="ew")
+        def sel():
+            f = filedialog.askopenfilename(filetypes=filetypes)
+            if f and os.path.isfile(f):
+                self.config[key].set(f)
         ttk.Button(frame, text="...", command=sel, bootstyle="secondary").grid(row=0, column=2, padx=5)
         frame.columnconfigure(1, weight=1)
 
@@ -188,58 +234,32 @@ class App:
                 return
 
         files = self.get_files_to_process()
-        if not files:
+        if not files and self.config["descomprimir"].get():
             messagebox.showerror("Error", "No hay archivos para procesar.")
             return
-
-        # --- Lógica robusta para pedir fecha de inicio en el hilo principal ---
-        prompt_start_date_value = None
-        if self.config["concatenar_excels"].get():
-            import os
-            excel_folder = self.config["excel_output_folder"].get()
-            concat_file = os.path.join(excel_folder, "concatenado.xlsx")
-            if not os.path.exists(concat_file):
-                # Buscar archivos .xlsx válidos
-                from concat_excels import extract_date_from_filename
-                all_files = [(extract_date_from_filename(f), f) for f in os.listdir(excel_folder) if f.endswith(".xlsx") and not f.startswith("~$")]
-                all_files = [(d, f) for d, f in all_files if d]
-                if all_files:
-                    all_files.sort()
-                    min_date, max_date = all_files[0][0], all_files[-1][0]
-                    try:
-                        prompt_start_date_value = self.prompt_start_date(min_date, max_date)
-                    except Exception as e:
-                        messagebox.showerror("Cancelado", str(e))
-                        return
-                else:
-                    messagebox.showerror("Error", "No hay archivos Excel válidos para concatenar.")
-                    return
 
         self.save_config()
         self.stop_event.clear()
         self.progress.start()
         self.log_text.delete("1.0","end")
-        Thread(target=self._run, args=(prompt_start_date_value,), daemon=True).start()
+        Thread(target=self._run, daemon=True).start()
 
-    def _run(self, prompt_start_date_value=None):
+    def _run(self):
         cfg = {k:v.get() for k,v in self.config.items()}
         cfg["selected_files"] = self.selected_files
 
-        # Función de confirmación para saltos de días
         def confirm_continue_func(msg):
             return messagebox.askyesno("Salto de días detectado", msg + "\n¿Desea continuar?")
 
-        # Función de prompt para pasar la fecha ya seleccionada
         def prompt_func(min_date, max_date):
-            return prompt_start_date_value
+            try:
+                return self.prompt_start_date(min_date, max_date)
+            except Exception as e:
+                self.log_message(f"Operación cancelada: {e}")
+                return None
 
         try:
-            # Pasar la función de confirmación y prompt al main si la opción de concatenar excels está activa
-            if cfg.get("concatenar_excels", False):
-                main(cfg, log_callback=self.log_message, confirm_continue_func=confirm_continue_func, prompt_func=prompt_func)
-            else:
-                main(cfg, log_callback=self.log_message)
-            # al terminar, guarda el último
+            main(cfg, log_callback=self.log_message, confirm_continue_func=confirm_continue_func, prompt_func=prompt_func)
             if self.selected_files:
                 last = self.selected_files[-1]
                 self.config["last_processed"].set(last)
@@ -250,14 +270,22 @@ class App:
                     json.dump(data,f,indent=4)
                 self.log_message(f"Guardado último archivo: {last}")
         except Exception as e:
-            self.log_message(f"Error: {e}")
+            self.log_message(f"ERROR: {e}")
         finally:
             self.progress.stop()
 
     def log_message(self,msg):
-        self.log_text.insert(END, msg+"\n")
-        self.log_text.see(END)
-        self.root.update_idletasks()
+        if not self.root.winfo_exists():
+            return
+
+        def _update_log():
+            if msg.startswith("ERROR:"):
+                messagebox.showerror("Error", msg)
+            self.log_text.insert(END, msg+"\n")
+            self.log_text.see(END)
+            self.root.update_idletasks()
+
+        self.root.after(0, _update_log)
 
     def save_config(self):
         data = {k:v.get() for k,v in self.config.items()}
@@ -272,6 +300,19 @@ class App:
             for k in self.config:
                 if k in data:
                     self.config[k].set(data[k])
+
+    def toggle_processing_options(self):
+        if self.config["descomprimir"].get():
+            self.rainflow_cb.config(state="normal")
+            self.graficos_matlab_cb.config(state="normal")
+            self.incompletos_cb.config(state="normal")
+        else:
+            self.config["rainflow"].set(False)
+            self.config["graficos_matlab"].set(False)
+            self.config["procesar_incompleto"].set(False)
+            self.rainflow_cb.config(state="disabled")
+            self.graficos_matlab_cb.config(state="disabled")
+            self.incompletos_cb.config(state="disabled")
 
     def create_widgets(self):
         self.root.columnconfigure(0, weight=1)
@@ -328,10 +369,19 @@ class App:
         self.create_labeled_entry(pf2,"FS (Hz):","FS",0,0)
         self.create_labeled_entry(pf2,"Canales:","n_channels",0,1)
         self.create_labeled_entry(pf2,"Unidad:","unidad",0,2)
-        ttk.Checkbutton(pf2,text="Descomprimir y Procesar",variable=self.config["descomprimir"],bootstyle="round-toggle").grid(row=1,column=0,sticky="w",pady=2)
-        ttk.Checkbutton(pf2,text="Incompletos",variable=self.config["procesar_incompleto"],bootstyle="round-toggle").grid(row=1,column=1,sticky="w",pady=2)
-        ttk.Checkbutton(pf2,text="Gráficos MATLAB",variable=self.config["graficos_matlab"],bootstyle="round-toggle").grid(row=1,column=2,sticky="w",pady=2)
-        ttk.Checkbutton(pf2,text="Rainflow",variable=self.config["rainflow"],bootstyle="round-toggle").grid(row=2,column=0,sticky="w",pady=2)
+        
+        descomprimir_cb = ttk.Checkbutton(pf2,text="Descomprimir y Procesar",variable=self.config["descomprimir"],bootstyle="round-toggle", command=self.toggle_processing_options)
+        descomprimir_cb.grid(row=1,column=0,sticky="w",pady=2)
+        
+        self.incompletos_cb = ttk.Checkbutton(pf2,text="Incompletos",variable=self.config["procesar_incompleto"],bootstyle="round-toggle")
+        self.incompletos_cb.grid(row=1,column=1,sticky="w",pady=2)
+        
+        self.graficos_matlab_cb = ttk.Checkbutton(pf2,text="Gráficos MATLAB",variable=self.config["graficos_matlab"],bootstyle="round-toggle")
+        self.graficos_matlab_cb.grid(row=1,column=2,sticky="w",pady=2)
+        
+        self.rainflow_cb = ttk.Checkbutton(pf2,text="Rainflow",variable=self.config["rainflow"],bootstyle="round-toggle")
+        self.rainflow_cb.grid(row=2,column=0,sticky="w",pady=2)
+        
         ttk.Checkbutton(pf2,text="Conteo Arranques/Paradas",variable=self.config["realizar_conteo"],bootstyle="round-toggle").grid(row=2,column=1,sticky="w",pady=2)
         ttk.Checkbutton(pf2,text="Concatenar Excels",variable=self.config["concatenar_excels"],bootstyle="round-toggle").grid(row=2,column=2,sticky="w",pady=2)
 
@@ -353,7 +403,32 @@ class App:
         ttk.Button(bf, text="Avanzada", command=self.open_advanced_config, bootstyle="info-outline").grid(row=0, column=2, padx=5)
 
     def open_advanced_config(self):
-        messagebox.showinfo("Avanzada", "Pendiente...")
+        advanced_window = ttk.Toplevel(self.root)
+        advanced_window.title("Configuración Avanzada")
+        advanced_window.geometry("700x250")
+        advanced_window.resizable(True, True)
+
+        matlab_frame = ttk.Labelframe(advanced_window, text="Rutas de MATLAB", padding=10)
+        matlab_frame.pack(fill="x", expand=True, padx=10, pady=10)
+        
+        matlab_frame.columnconfigure(0, weight=1)
+
+        self.create_file_input(matlab_frame, "Ruta de matlab.exe:", "matlab_path", 0, (("Executable files", "*.exe"), ("All files", "*.*")))
+        self.create_folder_input(matlab_frame, "Carpeta de script .m:", "ruta_matlab_script", 1)
+        self.create_folder_input(matlab_frame, "Carpeta para guardar gráficos:", "ruta_guardado_graficos", 2)
+
+        button_frame = ttk.Frame(advanced_window)
+        button_frame.pack(pady=10)
+
+        def save_and_close():
+            self.save_config()
+            advanced_window.destroy()
+
+        save_button = ttk.Button(button_frame, text="Guardar y Cerrar", command=save_and_close, bootstyle="success")
+        save_button.pack(side="left", padx=5)
+
+        cancel_button = ttk.Button(button_frame, text="Cancelar", command=advanced_window.destroy, bootstyle="secondary")
+        cancel_button.pack(side="left", padx=5)
 
 # Lanzamiento
 root = ttk.Window(themename="superhero")

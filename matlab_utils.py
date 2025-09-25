@@ -33,10 +33,12 @@ def construir_comando_matlab(
     escritura: bool,
     fs: int,
     n_channels: int,
+    ruta_guardado_graficos: str,
 ) -> list:
     script_dir = Path(script_path).as_posix()
     mat_file_posix = Path(mat_file).as_posix()
     excel_posix = Path(excel_folder).as_posix()
+    ruta_guardado_graficos_posix = Path(ruta_guardado_graficos).as_posix()
 
     opts = ["-nosplash"]
     if platform.system() != "Windows":
@@ -51,7 +53,8 @@ def construir_comando_matlab(
                              f"{str(graficos).lower()},"
                              f"{str(escritura).lower()},"
                              f"{fs},"
-                             f"{n_channels});"
+                             f"{n_channels},"
+                             f"'{ruta_guardado_graficos_posix}');"
         f"catch e, "
             f"disp(getReport(e,'extended')); "
             f"exit(1);"
@@ -71,6 +74,7 @@ def run_matlab_script(name: str, config: Dict[str, Any], show_output: bool = Fal
     excel_folder = config.get("excel_output_folder", "")
     graficos_matlab = config.get("graficos_matlab", False)
     n_channels = config.get("n_channels", 16)
+    ruta_guardado_graficos = config.get("ruta_guardado_graficos", "")
 
     Path(excel_folder).mkdir(parents=True, exist_ok=True)
 
@@ -87,6 +91,7 @@ def run_matlab_script(name: str, config: Dict[str, Any], show_output: bool = Fal
         escritura=escritura,
         fs=fs,
         n_channels=n_channels,
+        ruta_guardado_graficos=ruta_guardado_graficos,
     )
 
     log(f"[MATLAB] Ejecutando '{name}'", "info", log_callback)

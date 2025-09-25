@@ -27,7 +27,7 @@ def ask_start_date(min_date, max_date, prompt_func=None):
     while True:
         date_str = simpledialog.askstring(
             "Fecha de inicio",
-            f"Ingrese la fecha desde la que desea concatenar (formato: YYYY-MM-DD).\nRango disponible: {min_date.date()} a {max_date.date()}"
+            f"Ingrese la fecha desde la que desea concatenar (formato:DD.M.AA).\nRango disponible: {min_date.date()} a {max_date.date()}"
         )
         if date_str is None:
             root.destroy()
@@ -42,7 +42,7 @@ def ask_start_date(min_date, max_date, prompt_func=None):
             else:
                 return date
         except Exception:
-            messagebox.showerror("Error", "Formato de fecha inválido. Use YYYY-MM-DD.")
+            messagebox.showerror("Error", "Formato de fecha inválido. Use DD.M.AA.")
 
 def get_excel_files(folder, start_date):
     files = []
@@ -67,7 +67,7 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, log_func=print, c
                  if f.endswith(".xlsx") and not f.startswith("~$")]
     all_files = [(d, f) for d, f in all_files if d]
     if not all_files:
-        log_func("No hay archivos Excel válidos para concatenar.")
+        log_func("ERROR: No hay archivos Excel válidos para concatenar.")
         return
     # Ordenar por fecha real (anio, mes, dia)
     all_files.sort(key=lambda x: x[0])
@@ -91,6 +91,9 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, log_func=print, c
     else:
         # Si no existe, preguntar fecha de inicio
         start_date = ask_start_date(min_date, max_date, prompt_func)
+        if start_date is None:
+            log_func("Concatenación cancelada por el usuario.")
+            return
         # start_date es una tupla (anio, mes, dia)
         files = [(d, f) for d, f in all_files if d >= start_date]
 
