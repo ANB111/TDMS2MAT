@@ -2,8 +2,19 @@ import os
 import subprocess
 import logging
 import platform
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 # Configurar logging
 logging.basicConfig(
@@ -153,7 +164,7 @@ def obtener_script_path(config: Dict[str, Any], log_callback: Optional[Callable]
         else:
             log(f"No se encontró '{matlab_script_name}' en ruta proporcionada: {config_path}", "warning", log_callback)
 
-    default_path = os.path.abspath(os.path.dirname(__file__))
+    default_path = resource_path('.')
     script_en_default = os.path.join(default_path, matlab_script_name)
 
     if os.path.isfile(script_en_default):

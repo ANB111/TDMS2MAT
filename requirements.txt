@@ -1,3 +1,5 @@
 nptdms
 pandas
 scipy
+ttkbootstrap
+openpyxl

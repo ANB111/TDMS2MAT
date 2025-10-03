@@ -6,12 +6,12 @@ from tkinter import filedialog, messagebox, StringVar, IntVar, BooleanVar, Listb
 from threading import Thread, Event
 from main import main
 import logging
+import tkinter.simpledialog as sd
 
 CONFIG_FILE = "config.json"
 
 class App:
     def prompt_start_date(self, min_date, max_date):
-        import tkinter.simpledialog as sd
         from datetime import datetime
 
         # min_date y max_date pueden ser tuplas (anio, mes, dia) o datetime

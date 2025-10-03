@@ -11,11 +11,10 @@ from tdms_utils import procesar_archivos_tdms_paralelo
 from csv_utils import ordenar_y_agrupado_por_dia
 from mat_utils import csv_to_mat
 from matlab_utils import process_mat_files
+import concat_excels
 
 from startup_shutdown_counter import process_mat_folder
-# Importar el script de concatenación
-import importlib.util
-import sys
+import tempfile
 
 
 class ProcessingError(Exception):
@@ -130,8 +129,7 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
     selected_files = config.get("selected_files", [])
     concatenar_excels = config.get("concatenar_excels", False)
 
-    # verificar y crear carpeta temp en la ruta del script
-    temp_folder = os.path.join(os.path.dirname(__file__), "temp")
+    temp_folder = os.path.join(tempfile.gettempdir(), "tdms2mat_temp")
     
     # Validar carpetas
     folders = [input_folder, output_folder, excel_output_folder, str(temp_folder)]
@@ -192,30 +190,16 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
             (output_folder, excel_path, log)
         ))
 
-    # Etapa 7: Concatenar excels (opcional)
     if concatenar_excels:
         def run_concat_excels():
-            concat_path = os.path.join(excel_output_folder, "concat_excels.py")
-            if not os.path.exists(concat_path):
-                concat_path = os.path.join(os.path.dirname(__file__), "concat_excels.py")
-            if not os.path.exists(concat_path):
-                raise FileNotFoundError("No se encontró concat_excels.py para concatenar excels.")
-            spec = importlib.util.spec_from_file_location("concat_excels", concat_path)
-            concat_module = importlib.util.module_from_spec(spec)
-            sys.modules["concat_excels"] = concat_module
-            spec.loader.exec_module(concat_module)
             concat_file = os.path.join(excel_output_folder, "concatenado.xlsx")
-            # Pasar confirm_continue_func y prompt_func si están disponibles
-            if hasattr(concat_module, 'concat_excels'):
-                concat_module.concat_excels(
-                    excel_output_folder,
-                    concat_file,
-                    prompt_func=prompt_func,
-                    confirm_continue_func=confirm_continue_func,
-                    log_func=log
-                )
-            else:
-                raise Exception("No se encontró la función concat_excels en el módulo.")
+            concat_excels.concat_excels(
+                excel_output_folder,
+                concat_file,
+                prompt_func=prompt_func,
+                confirm_continue_func=confirm_continue_func,
+                log_func=log
+            )
         stages.append((
             "Concatenación de excels de salida",
             run_concat_excels,

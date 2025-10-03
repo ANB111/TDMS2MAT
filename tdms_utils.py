@@ -1,5 +1,4 @@
 import os
-import sys
 from nptdms import TdmsFile
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
