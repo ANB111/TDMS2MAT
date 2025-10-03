@@ -1,4 +1,3 @@
 nptdms
 pandas
 scipy
-tqdm

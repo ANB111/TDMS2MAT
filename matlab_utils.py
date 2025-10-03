@@ -4,7 +4,6 @@ import logging
 import platform
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
-from tqdm import tqdm
 
 # Configurar logging
 logging.basicConfig(
@@ -125,7 +124,7 @@ def process_mat_files(output_folder: str, config: Dict[str, Any], log_callback: 
     failed = []
     show_output = config.get("mostrar_salida_matlab", False)
 
-    for mat_file in tqdm(files, desc="Procesando archivos .mat"):
+    for mat_file in files:
         name = Path(mat_file).stem
         expected_excel = Path(config["excel_output_folder"]) / f"{name}.xlsx"
 

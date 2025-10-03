@@ -1,7 +1,6 @@
 import os
 import pandas as pd
 from scipy.io import savemat
-from tqdm import tqdm
 
 
 def csv_to_mat(input_folder, output_folder, unidad="05", procesar_incompleto=False, log_callback=None):
@@ -40,7 +39,7 @@ def csv_to_mat(input_folder, output_folder, unidad="05", procesar_incompleto=Fal
 
     log(f"[CSV2MAT] Procesando {len(csv_files)} archivo(s)...")
 
-    for csv_file in tqdm(csv_files, desc="Convirtiendo archivos", unit="archivo"):
+    for csv_file in csv_files:
         output_name = csv_file.replace("_temp", "")
         input_file = os.path.join(input_folder, csv_file)
         # Extraer solo la parte de la fecha (ej: 25.2.11 de 25.2.11.csv o 25.2.11-u05.csv)

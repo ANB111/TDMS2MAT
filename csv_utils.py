@@ -1,7 +1,6 @@
 import os
 import shutil
 import pandas as pd
-from tqdm import tqdm
 import glob
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
@@ -39,10 +38,10 @@ def ordenar_y_agrupado_por_dia(input_folder, num_workers=14):
 
     # Procesar archivos CSV en paralelo
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        list(tqdm(executor.map(procesar_csv_individual, csv_files), total=len(csv_files), desc="Leyendo archivos CSV", unit="archivo"))
+        list(executor.map(procesar_csv_individual, csv_files))
 
     # Combinar y guardar resultados por día
-    for date, groups in tqdm(datos_por_dia.items(), desc="Concatenando archivos por día", unit="día"):
+    for date, groups in datos_por_dia.items():
         daily_data = pd.concat(groups, ignore_index=True)
         daily_data.sort_values(by='Time', inplace=True)
         daily_data.drop(columns=['Date'], inplace=True)

@@ -3,7 +3,6 @@ import sys
 from nptdms import TdmsFile
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
 
 
 
@@ -67,18 +66,15 @@ def procesar_archivos_tdms_paralelo(carpeta_tdms, num_workers=14, log_callback=N
         return
 
 
-    with tqdm(total=len(archivos_tdms), desc="Procesando archivos TDMS", unit="archivo", disable=not sys.stdout.isatty()) as barra:
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futuros = {
-                executor.submit(convertir_tdms_a_csv, archivo, carpeta_tdms, log_callback): archivo
-                for archivo in archivos_tdms
-            }
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futuros = {
+            executor.submit(convertir_tdms_a_csv, archivo, carpeta_tdms, log_callback): archivo
+            for archivo in archivos_tdms
+        }
 
-            for futuro in as_completed(futuros):
-                archivo = futuros[futuro]
-                try:
-                    futuro.result()
-                except Exception as e:
-                    log(f"[TDMS2CSV] Error procesando {archivo}: {e}")
-                finally:
-                    barra.update(1)
+        for futuro in as_completed(futuros):
+            archivo = futuros[futuro]
+            try:
+                futuro.result()
+            except Exception as e:
+                log(f"[TDMS2CSV] Error procesando {archivo}: {e}")
