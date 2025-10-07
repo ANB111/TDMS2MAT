@@ -1,12 +1,24 @@
 import os
 import subprocess
 import shutil
+import threading
+from typing import Optional
 
+# Copied from main.py to avoid circular import
+class ProcessingError(Exception):
+    """Custom exception for processing errors."""
+    pass
 
-def decompress_zip_files(input_folder, output_folder, selected_files):
+def check_stop_event(stop_event: Optional[threading.Event]):
+    """Checks if the stop event is set and raises an exception if it is."""
+    if stop_event and stop_event.is_set():
+        raise ProcessingError("Proceso cancelado por el usuario.")
+
+def decompress_zip_files(input_folder, output_folder, selected_files, stop_event: Optional[threading.Event] = None):
     """
-    Descomprime los archivos ZIP seleccionados directamente en la carpeta de salida sin crear subcarpetas.
-    Si hay conflictos de nombres, los archivos se renombran automáticamente.
+    Decompresses selected ZIP files directly into the output folder without creating subfolders.
+    If there are name conflicts, files are automatically renamed.
+    Checks for a cancellation event before processing each file.
     """
     if shutil.which('7z') is None:
         raise EnvironmentError("El programa '7z' no está instalado o no está en el PATH.")
@@ -14,6 +26,9 @@ def decompress_zip_files(input_folder, output_folder, selected_files):
     os.makedirs(output_folder, exist_ok=True)
 
     for zip_file in selected_files:
+        # Check for cancellation before processing the next file
+        check_stop_event(stop_event)
+
         zip_path = os.path.join(input_folder, zip_file)
         print(f"Procesando archivo: {zip_file}")
 

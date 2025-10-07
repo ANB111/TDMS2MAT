@@ -1,6 +1,7 @@
 import os
 import logging
 import traceback
+import threading
 from pathlib import Path
 from typing import Dict, Any, Callable, Optional, List
 
@@ -79,7 +80,13 @@ def process_stage(name: str, func: Callable, args: tuple,
         return False
 
 
-def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] = None, confirm_continue_func: Optional[Callable[[str], bool]] = None, prompt_func: Optional[Callable] = None) -> bool:
+def check_stop_event(stop_event: Optional[threading.Event]):
+    """Comprueba si el evento de detención está configurado y genera una excepción si lo está."""
+    if stop_event and stop_event.is_set():
+        raise ProcessingError("Proceso cancelado por el usuario.")
+
+
+def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] = None, confirm_continue_func: Optional[Callable[[str], bool]] = None, prompt_func: Optional[Callable] = None, stop_event: Optional[threading.Event] = None) -> bool:
     """
     Función principal de procesamiento con manejo mejorado de errores y configuración.
     
@@ -152,7 +159,7 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
         stages.append((
             "Descompresión de archivos ZIP",
             decompress_zip_files,
-            (input_folder, str(temp_folder), selected_files)
+            (input_folder, str(temp_folder), selected_files, stop_event)
         ))
         # Etapa 2: Procesamiento TDMS
         stages.append((
@@ -208,11 +215,16 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
     
     # Ejecutar etapas
     success = True
-    for name, func, args in stages:
-        if not process_stage(name, func, args, log):
-            success = False
-            log(f"Proceso detenido debido a un error en la etapa: {name}", logging.ERROR)
-            break
+    try:
+        for name, func, args in stages:
+            check_stop_event(stop_event)
+            if not process_stage(name, func, args, log):
+                success = False
+                log(f"Proceso detenido debido a un error en la etapa: {name}", logging.ERROR)
+                break
+    except ProcessingError as e:
+        log(str(e), logging.INFO)
+        success = False
 
     if success:
         log("----- Proceso completado exitosamente -----", logging.INFO)

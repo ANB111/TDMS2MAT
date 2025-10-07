@@ -274,7 +274,7 @@ class App:
                 return None
 
         try:
-            main(cfg, log_callback=self.log_message, confirm_continue_func=confirm_continue_func, prompt_func=prompt_func)
+            main(cfg, log_callback=self.log_message, confirm_continue_func=confirm_continue_func, prompt_func=prompt_func, stop_event=self.stop_event)
             if self.selected_files:
                 last = self.selected_files[-1]
                 self.config["last_processed"].set(last)
@@ -336,12 +336,12 @@ class App:
         mf.columnconfigure((0,1), weight=1)
 
         # Rutas (span=2)
-        pf = ttk.Labelframe(mf, text="Rutas y Carpetas", padding=10)
+        pf = ttk.Labelframe(mf, text="Configuración de Carpetas", padding=10)
         pf.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
         pf.columnconfigure(1, weight=1)
-        self.create_folder_input(pf,"Carpeta Entrada:","input_folder",0)
-        self.create_folder_input(pf,"Carpeta Salida:","output_folder",1)
-        self.create_folder_input(pf,"Excel Salida:","excel_output_folder",2)
+        self.create_folder_input(pf,"Carpeta Entrada (.ZIP):","input_folder",0)
+        self.create_folder_input(pf,"Carpeta de Salida (.MAT):","output_folder",1)
+        self.create_folder_input(pf,"Carpeta de Salida (EXCELS):","excel_output_folder",2)
 
         # “Desde último”
         cb = ttk.Checkbutton(
@@ -377,32 +377,38 @@ class App:
         btnr.grid(row=1, column=0, columnspan=2, pady=5)
         ttk.Button(btnr, text="< Quitar", command=self.remove_selected).grid(row=0, column=0, padx=5)
 
-        # Parámetros y procesos
-        pf2 = ttk.Labelframe(mf, text="Parámetros y Procesos", padding=10)
+        # Parámetros de Procesamiento
+        pf2 = ttk.Labelframe(mf, text="Parámetros de Procesamiento", padding=10)
         pf2.grid(row=3, column=0, columnspan=2, sticky="ew", pady=5)
-        pf2.columnconfigure((1,2,3), weight=1)
-        self.create_labeled_entry(pf2,"FS (Hz):","FS",0,0)
-        self.create_labeled_entry(pf2,"Canales:","n_channels",0,1)
-        self.create_labeled_entry(pf2,"Unidad:","unidad",0,2)
-        
-        descomprimir_cb = ttk.Checkbutton(pf2,text="Descomprimir y Procesar",variable=self.config["descomprimir"],bootstyle="round-toggle", command=self.toggle_processing_options)
-        descomprimir_cb.grid(row=1,column=0,sticky="w",pady=2)
-        
-        self.incompletos_cb = ttk.Checkbutton(pf2,text="Incompletos",variable=self.config["procesar_incompleto"],bootstyle="round-toggle")
-        self.incompletos_cb.grid(row=1,column=1,sticky="w",pady=2)
-        
-        self.graficos_matlab_cb = ttk.Checkbutton(pf2,text="Gráficos MATLAB",variable=self.config["graficos_matlab"],bootstyle="round-toggle")
-        self.graficos_matlab_cb.grid(row=1,column=2,sticky="w",pady=2)
-        
-        self.rainflow_cb = ttk.Checkbutton(pf2,text="Rainflow",variable=self.config["rainflow"],bootstyle="round-toggle")
-        self.rainflow_cb.grid(row=2,column=0,sticky="w",pady=2)
-        
-        ttk.Checkbutton(pf2,text="Conteo Arranques/Paradas",variable=self.config["realizar_conteo"],bootstyle="round-toggle").grid(row=2,column=1,sticky="w",pady=2)
-        ttk.Checkbutton(pf2,text="Concatenar Excels",variable=self.config["concatenar_excels"],bootstyle="round-toggle").grid(row=2,column=2,sticky="w",pady=2)
+        pf2.columnconfigure((0, 1, 2), weight=1)
+        self.create_labeled_entry(pf2, "FS (Hz):", "FS", 0, 0)
+        self.create_labeled_entry(pf2, "Canales:", "n_channels", 0, 1)
+        self.create_labeled_entry(pf2, "Unidad:", "unidad", 0, 2)
+
+        # Procesos
+        pf3 = ttk.Labelframe(mf, text="Procesos", padding=10)
+        pf3.grid(row=4, column=0, columnspan=2, sticky="ew", pady=5)
+        pf3.columnconfigure((0, 1), weight=1)
+
+        descomprimir_cb = ttk.Checkbutton(pf3, text="Descomprimir y Procesar", variable=self.config["descomprimir"], bootstyle="round-toggle", command=self.toggle_processing_options)
+        descomprimir_cb.grid(row=0, column=0, sticky="w", pady=2)
+
+        self.incompletos_cb = ttk.Checkbutton(pf3, text="Procesar días incompletos", variable=self.config["procesar_incompleto"], bootstyle="round-toggle")
+        self.incompletos_cb.grid(row=0, column=1, sticky="w", pady=2)
+
+        self.rainflow_cb = ttk.Checkbutton(pf3, text="Rainflow", variable=self.config["rainflow"], bootstyle="round-toggle")
+        self.rainflow_cb.grid(row=1, column=0, sticky="w", pady=2)
+
+        ttk.Checkbutton(pf3, text="Realizar conteo de Arranques/Paradas", variable=self.config["realizar_conteo"], bootstyle="round-toggle").grid(row=1, column=1, sticky="w", pady=2)
+
+        self.graficos_matlab_cb = ttk.Checkbutton(pf3, text="Almacenar gráficas de MATLAB", variable=self.config["graficos_matlab"], bootstyle="round-toggle")
+        self.graficos_matlab_cb.grid(row=2, column=0, sticky="w", pady=2)
+
+        ttk.Checkbutton(pf3, text="Concatenar Excels", variable=self.config["concatenar_excels"], bootstyle="round-toggle").grid(row=2, column=1, sticky="w", pady=2)
 
         # Log
-        lf = ttk.Labelframe(mf, text="Registro", padding=10)
-        lf.grid(row=4, column=0, columnspan=2, sticky="nsew", pady=5)
+        lf = ttk.Labelframe(mf, text="Registro de Actividad", padding=10)
+        lf.grid(row=5, column=0, columnspan=2, sticky="nsew", pady=5)
         lf.rowconfigure(0, weight=1); lf.columnconfigure(0, weight=1)
         self.log_text = ttk.Text(lf, wrap="word", height=10)
         self.log_text.grid(sticky="nsew")
@@ -410,12 +416,12 @@ class App:
 
         # Progreso y botones
         self.progress = ttk.Progressbar(mf, mode="indeterminate", bootstyle="info-striped")
-        self.progress.grid(row=5, column=0, columnspan=2, sticky="ew", pady=5)
+        self.progress.grid(row=6, column=0, columnspan=2, sticky="ew", pady=5)
         bf = ttk.Frame(mf)
-        bf.grid(row=6, column=0, columnspan=2, sticky="ew", pady=5)
-        ttk.Button(bf, text="Iniciar", command=self.start, bootstyle="success-outline").grid(row=0, column=0, padx=5)
-        ttk.Button(bf, text="Detener", command=self.stop_event.set, bootstyle="danger-outline").grid(row=0, column=1, padx=5)
-        ttk.Button(bf, text="Avanzada", command=self.open_advanced_config, bootstyle="info-outline").grid(row=0, column=2, padx=5)
+        bf.grid(row=7, column=0, columnspan=2, sticky="ew", pady=5)
+        ttk.Button(bf, text="Procesar Archivos", command=self.start, bootstyle="success-outline").grid(row=0, column=0, padx=5)
+        ttk.Button(bf, text="Cancelar", command=self.stop_event.set, bootstyle="danger-outline").grid(row=0, column=1, padx=5)
+        ttk.Button(bf, text="⚙️", command=self.open_advanced_config, bootstyle="info-outline").grid(row=0, column=2, padx=5)
 
     def open_advanced_config(self):
         advanced_window = ttk.Toplevel(self.root)
