@@ -1,9 +1,22 @@
 import os
 import re
 import pandas as pd
+import numpy as np
+import traceback
 from openpyxl import load_workbook, Workbook
 from tkinter import simpledialog, Tk, messagebox
 from datetime import datetime
+
+# Constantes de Paris
+C = np.array([2.4e-11, 3.2e-11, 9.55e-12, 7.87e-12, 7.56e-12])
+m = np.array([2.82, 2.82, 2.86, 2.89, 2.90])
+
+def find_column_name(df, possible_names):
+    """Encuentra el nombre de una columna en un DataFrame a partir de una lista de nombres posibles."""
+    for name in possible_names:
+        if name in df.columns:
+            return name
+    return None
 
 def extract_date_from_filename(filename):
     # Busca patrones tipo 25.7.1-u05.xlsx o 25.9.4-u05.xlsx
@@ -155,15 +168,76 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, log_func=print, c
             for sheet in xls.sheet_names:
                 if sheet.startswith("delta K"):
                     df = xls.parse(sheet)
-                    # Insertar columna 'Fecha' al inicio, solo la primera fila con la fecha, el resto vacío
+
+                    # --- BÚSQUEDA ROBUSTA DE COLUMNAS ---
+                    ciclos_col_name = find_column_name(df, ['Ciclos', 'ciclos'])
+                    delta_k_col_name = find_column_name(df, ['ΔK', 'delta K', 'd'])
+
+                    # Verificar que las columnas necesarias existen
+                    if not all([ciclos_col_name, delta_k_col_name]):
+                        log_func(f"ADVERTENCIA: La hoja '{sheet}' en el archivo '{f}' no contiene una columna de Ciclos o Delta K. Omitiendo cálculos.")
+                        fecha_col = [fecha_str] + [None]*(len(df)-1)
+                        df.insert(0, 'Fecha', fecha_col)
+                        if sheet not in delta_sheets:
+                            delta_sheets[sheet] = []
+                        delta_sheets[sheet].append((df, ciclo == 0))
+                        continue
+
+                    # --- INICIO DE CÁLCULOS NUEVOS ---
+                    original_columns = df.columns.tolist()
+
+                    # Asegurar tipos de datos
+                    df[ciclos_col_name] = pd.to_numeric(df[ciclos_col_name], errors='coerce').fillna(0)
+                    df[delta_k_col_name] = pd.to_numeric(df[delta_k_col_name], errors='coerce').fillna(0)
+
+                    # Calcular suma acumulada (corregido para la primera ejecución)
+                    ciclos_acumulados = df[ciclos_col_name].cumsum()
+                    if sheet in last_valid_rows and 'Ciclos Acumulados' in last_valid_rows[sheet].columns:
+                        ciclos_acumulados += last_valid_rows[sheet]['Ciclos Acumulados'].iloc[0]
+
+                    # Listas para mantener el orden
+                    paris_cols, a_final_cols = [], []
+
+                    # Calcular columnas de Paris y a_final
+                    for i in range(len(C)):
+                        paris_col = f'C{i+1}(ΔK)^m{i+1}'
+                        delta_a_col = f'Δa{i+1}'
+                        a_final_header = f'C{i+1}={C[i]}'
+
+                        df[paris_col] = C[i] * (df[delta_k_col_name] ** m[i])
+                        df[delta_a_col] = df[paris_col] * ciclos_acumulados
+                        df[a_final_header] = 100 + (df[delta_a_col] * 1000)
+                        
+                        paris_cols.extend([paris_col, delta_a_col])
+                        a_final_cols.append(a_final_header)
+                    
+                    # Calcular la columna Dias
+                    N = len(df)
+                    if N > 0:
+                        current_day_integer = ciclo_inicial + ciclo
+                        df['Dias'] = current_day_integer + (np.arange(1, N + 1) / N)
+                    else:
+                        df['Dias'] = None
+
+                    df['Ciclos Acumulados'] = ciclos_acumulados
+
+                    # Definir el orden final de las columnas
+                    final_columns = original_columns + paris_cols + ['Dias'] + a_final_cols + ['Ciclos Acumulados']
+                    df = df[final_columns]
+
+                    # Insertar columna 'Fecha' al inicio
                     fecha_col = [fecha_str] + [None]*(len(df)-1)
                     df.insert(0, 'Fecha', fecha_col)
                     if sheet not in delta_sheets:
                         delta_sheets[sheet] = []
-                    delta_sheets[sheet].append((df, ciclo == 0))  # Guardar si es ciclo 0 para formato
+                    
+                    is_first_ever_write = (ciclo == 0 and not fechas_existentes)
+                    delta_sheets[sheet].append((df, is_first_ever_write))
+                    last_valid_rows[sheet] = df.iloc[[-1]].copy()
             ciclo += 1
         except Exception as e:
             log_func(f"Error procesando {ruta}: {e}")
+            log_func(traceback.format_exc())
 
     # Escribir al archivo concatenado
     from openpyxl.styles import Font
