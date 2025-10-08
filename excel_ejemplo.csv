@@ -2,4 +2,4 @@ Ciclos,Rango [kN],Media [kN],ti [s],ts [s],ΔK,C1(ΔK)^m1,Δa1,C2(ΔK)^m2,Δa2,C
 ,, , , , ,C1*(ΔK)^m1,(C1*ΔK^m1)*ciclosA,C2*(ΔK)^m2,(C2*ΔK^m2)*ciclosA,C3*(ΔK)^m3,(C3*ΔK^m3)*ciclosA,C4*(ΔK)^m4,(C4*ΔK^m4)*ciclosA,C5*(ΔK)^m5,(C5*ΔK^m5)*ciclosA,Dias/Datos,100+Δa1*1000,100+Δa2*1000,ciclosA
 
 
-Ciclos,	Rango [kN],	Media [kN],	ti [s],	ts [s],	delta K
+

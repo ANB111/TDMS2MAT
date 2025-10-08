@@ -3,7 +3,7 @@ import re
 import pandas as pd
 import numpy as np
 import traceback
-from openpyxl import load_workbook, Workbook
+from openpyxl import load_workbook
 from tkinter import simpledialog, Tk, messagebox
 from datetime import datetime
 
@@ -22,7 +22,6 @@ def extract_date_from_filename(filename):
     # Busca patrones tipo 25.7.1-u05.xlsx o 25.9.4-u05.xlsx
     match = re.match(r"(\d{2})\.(\d{1,2})\.(\d{1,2})", filename)
     if match:
-        # Devuelve tupla (anio, mes, dia) para orden y formato
         try:
             return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
         except Exception:
@@ -30,9 +29,7 @@ def extract_date_from_filename(filename):
     return None
 
 def ask_start_date(min_date, max_date, prompt_func=None):
-    """
-    prompt_func: función opcional para pedir la fecha al usuario (para integración con GUI)
-    """
+    """Pregunta al usuario desde qué fecha concatenar."""
     if prompt_func:
         return prompt_func(min_date, max_date)
     root = Tk()
@@ -40,13 +37,13 @@ def ask_start_date(min_date, max_date, prompt_func=None):
     while True:
         date_str = simpledialog.askstring(
             "Fecha de inicio",
-            f"Ingrese la fecha desde la que desea concatenar (formato:DD.M.AA).\nRango disponible: {min_date.date()} a {max_date.date()}"
+            f"Ingrese la fecha desde la que desea concatenar (formato: DD.M.AA).\nRango disponible: {min_date.date()} a {max_date.date()}"
         )
         if date_str is None:
             root.destroy()
             raise Exception("Operación cancelada por el usuario.")
         try:
-            date = datetime.strptime(date_str, "%Y-%m-%d")
+            date = datetime.strptime(date_str, "%d.%m.%y")
             if date < min_date:
                 messagebox.showinfo("Info", f"La fecha ingresada es anterior al archivo más antiguo. Se usará {min_date.date()}.")
                 return min_date
@@ -67,221 +64,184 @@ def get_excel_files(folder, start_date):
     return files
 
 
-def concat_excels(excel_folder, concat_file, prompt_func=None, log_func=print, confirm_continue_func=None):
-    """
-    Función principal para concatenar excels.
-    - excel_folder: carpeta donde están los excels individuales
-    - concat_file: ruta del archivo excel concatenado
-    - prompt_func: función para pedir fecha al usuario (opcional, para integración con GUI)
-    - log_func: función para loguear mensajes (por defecto print)
-    """
-    # Buscar archivos
+def concat_excels(excel_folder, concat_file, prompt_func=None, confirm_continue_func=None, log_func=print, ):
+    """Función principal para concatenar excels."""
+    # Buscar archivos disponibles
     all_files = [(extract_date_from_filename(f), f) for f in os.listdir(excel_folder)
                  if f.endswith(".xlsx") and not f.startswith("~$")]
     all_files = [(d, f) for d, f in all_files if d]
     if not all_files:
         log_func("ERROR: No hay archivos Excel válidos para concatenar.")
         return
-    # Ordenar por fecha real (anio, mes, dia)
+
+    # Ordenar por fecha real
     all_files.sort(key=lambda x: x[0])
-    min_date, max_date = all_files[0][0], all_files[-1][0]
+    min_date_tuple, max_date_tuple = all_files[0][0], all_files[-1][0]
+    min_date = datetime(2000 + min_date_tuple[0], min_date_tuple[1], min_date_tuple[2])
+    max_date = datetime(2000 + max_date_tuple[0], max_date_tuple[1], max_date_tuple[2])
 
-
-    # Determinar archivos a agregar y ciclo inicial
     ciclo_inicial = 0
     rutas_existentes = set()
     fechas_existentes = set()
+    last_valid_rows = {}
+
+    # Si existe un concatenado previo, recuperar último estado
     if os.path.exists(concat_file):
-        wb = load_workbook(concat_file, read_only=True)
-        if "archivo" in wb.sheetnames:
-            hoja_archivo = wb["archivo"]
-            for row in hoja_archivo.iter_rows(min_row=2, values_only=True):
-                rutas_existentes.add(row[3])  # Dirección Almacenamiento
-                fechas_existentes.add(row[1]) # Fecha en formato 25.7.15
-            ciclo_inicial = hoja_archivo.max_row - 1  # asume que no hay filas vacías
-        wb.close()
+        try:
+            wb = load_workbook(concat_file, read_only=True)
+            if "archivo" in wb.sheetnames:
+                hoja_archivo = wb["archivo"]
+                for row in hoja_archivo.iter_rows(min_row=2, values_only=True):
+                    if len(row) > 3 and row[3]:
+                        rutas_existentes.add(row[3])
+                    if len(row) > 1 and row[1]:
+                        fechas_existentes.add(row[1])
+                ciclo_inicial = hoja_archivo.max_row - 1
+            wb.close()
+
+            xls_existing = pd.ExcelFile(concat_file)
+            for sheet_name in xls_existing.sheet_names:
+                if sheet_name.startswith("delta K"):
+                    df_existing = xls_existing.parse(sheet_name)
+                    if not df_existing.empty:
+                        last_valid_row_df = df_existing[pd.to_numeric(
+                            df_existing.get('Ciclos Acumulados'), errors='coerce'
+                        ).notna()]
+                        if not last_valid_row_df.empty:
+                            last_valid_rows[sheet_name] = last_valid_row_df.iloc[[-1]].copy()
+        except Exception as e:
+            log_func(f"ADVERTENCIA: No se pudo leer el archivo concatenado existente '{concat_file}'. Se tratará como nuevo. Error: {e}")
+            ciclo_inicial = 0
+            rutas_existentes = set()
+            fechas_existentes = set()
+            last_valid_rows = {}
+
         files = [(d, f) for d, f in all_files if os.path.join(excel_folder, f) not in rutas_existentes]
     else:
-        # Si no existe, preguntar fecha de inicio
-        start_date = ask_start_date(min_date, max_date, prompt_func)
-        if start_date is None:
+        start_date_val = ask_start_date(min_date, max_date, prompt_func)
+        if start_date_val is None:
             log_func("Concatenación cancelada por el usuario.")
             return
-        # start_date es una tupla (anio, mes, dia)
-        files = [(d, f) for d, f in all_files if d >= start_date]
+        if isinstance(start_date_val, datetime):
+            start_date_tuple = (start_date_val.year - 2000, start_date_val.month, start_date_val.day)
+        else:
+            start_date_tuple = start_date_val
+        files = [(d, f) for d, f in all_files if d >= start_date_tuple]
 
     if not files:
         log_func("No hay archivos nuevos para agregar.")
         return
 
-    # Validar que los días sean consecutivos
-    files_sorted = sorted(files, key=lambda x: x[0])
-    fechas = [d for d, _ in files_sorted]
-    if fechas:
-        # Si ya hay fechas existentes, tomar la última fecha agregada
-        if fechas_existentes:
-            try:
-                # Convertir formato 25.7.15 a tupla (25,7,15)
-                last_fecha = max([tuple(map(int, f.split('.'))) for f in fechas_existentes if isinstance(f, str)])
-            except Exception:
-                last_fecha = None
-        else:
-            last_fecha = None
-        # Comprobar saltos
-        prev = last_fecha
-        from datetime import date
-        def to_date(t):
-            return date(2000+t[0], t[1], t[2])
-        for idx, fecha in enumerate(fechas):
-            if prev is not None:
-                delta = (to_date(fecha) - to_date(prev)).days
-                if delta > 1:
-                    msg = f"Se detectó un salto de {delta-1} día(s) entre {prev[0]}.{prev[1]}.{prev[2]} y {fecha[0]}.{fecha[1]}.{fecha[2]} al agregar archivos. ¿Desea continuar?"
-                    log_func(msg)
-                    if confirm_continue_func:
-                        if not confirm_continue_func(msg):
-                            log_func("Concatenación cancelada por el usuario debido a salto de días.")
-                            return
-                    else:
-                        log_func("No se puede continuar sin confirmación del usuario. Proceso cancelado.")
-                        return
-            prev = fecha
-
     # Concatenar datos
     archivo_rows = []
     delta_sheets = {}
-    ciclo = 0
-    for d, f in files_sorted:
+    ciclo_actual = 0
+
+    for d, f in files:
         ruta = os.path.join(excel_folder, f)
         try:
             xls = pd.ExcelFile(ruta)
-            df_archivo = xls.parse("Conteo Rainflow")
-            # Fecha en formato 25.7.15
             fecha_str = f"{d[0]}.{d[1]}.{d[2]}"
             archivo_rows.append({
-                "": ciclo,  # Primera columna vacía en encabezado, pero contiene el índice
+                "": ciclo_inicial + ciclo_actual,
                 "Fecha": fecha_str,
                 "Archivo": f,
                 "Dirección Almacenamiento": ruta
             })
-            # Para cada hoja delta K (sin columnas extra)
+
             for sheet in xls.sheet_names:
                 if sheet.startswith("delta K"):
                     df = xls.parse(sheet)
-
-                    # --- BÚSQUEDA ROBUSTA DE COLUMNAS ---
-                    ciclos_col_name = find_column_name(df, ['Ciclos', 'ciclos'])
-                    delta_k_col_name = find_column_name(df, ['ΔK', 'delta K', 'd'])
-
-                    # Verificar que las columnas necesarias existen
-                    if not all([ciclos_col_name, delta_k_col_name]):
-                        log_func(f"ADVERTENCIA: La hoja '{sheet}' en el archivo '{f}' no contiene una columna de Ciclos o Delta K. Omitiendo cálculos.")
-                        fecha_col = [fecha_str] + [None]*(len(df)-1)
-                        df.insert(0, 'Fecha', fecha_col)
-                        if sheet not in delta_sheets:
-                            delta_sheets[sheet] = []
-                        delta_sheets[sheet].append((df, ciclo == 0))
-                        continue
-
-                    # --- INICIO DE CÁLCULOS NUEVOS ---
                     original_columns = df.columns.tolist()
 
-                    # Asegurar tipos de datos
-                    df[ciclos_col_name] = pd.to_numeric(df[ciclos_col_name], errors='coerce').fillna(0)
-                    df[delta_k_col_name] = pd.to_numeric(df[delta_k_col_name], errors='coerce').fillna(0)
+                    ciclos_col = find_column_name(df, ['Ciclos', 'ciclos'])
+                    dk_col = find_column_name(df, ['ΔK', 'delta K', 'dK'])
 
-                    # Calcular suma acumulada (corregido para la primera ejecución)
-                    ciclos_acumulados = df[ciclos_col_name].cumsum()
+                    if not all([ciclos_col, dk_col]):
+                        log_func(f"ADVERTENCIA: La hoja '{sheet}' en '{f}' no tiene 'Ciclos' o 'ΔK'. Omitiendo cálculos.")
+                        df.insert(0, 'Fecha', [fecha_str] + [''] * (len(df) - 1))
+                        if sheet not in delta_sheets: delta_sheets[sheet] = []
+                        delta_sheets[sheet].append((df, ciclo_actual == 0 and not fechas_existentes))
+                        continue
+
+                    df[ciclos_col] = pd.to_numeric(df[ciclos_col], errors='coerce').fillna(0)
+                    df[dk_col] = pd.to_numeric(df[dk_col], errors='coerce').fillna(0)
+
+                    # Recuperar ciclos acumulados previos
+                    last_ciclos_acum = 0
                     if sheet in last_valid_rows and 'Ciclos Acumulados' in last_valid_rows[sheet].columns:
-                        ciclos_acumulados += last_valid_rows[sheet]['Ciclos Acumulados'].iloc[0]
+                        val = pd.to_numeric(last_valid_rows[sheet]['Ciclos Acumulados'].iloc[0], errors='coerce')
+                        last_ciclos_acum = np.nan_to_num(val, nan=0.0)
 
-                    # Listas para mantener el orden
+                    df['Ciclos Acumulados'] = df[ciclos_col].cumsum() + last_ciclos_acum
+
+                    # Columnas de París
                     paris_cols, a_final_cols = [], []
-
-                    # Calcular columnas de Paris y a_final
                     for i in range(len(C)):
                         paris_col = f'C{i+1}(ΔK)^m{i+1}'
                         delta_a_col = f'Δa{i+1}'
                         a_final_header = f'C{i+1}={C[i]}'
 
-                        df[paris_col] = C[i] * (df[delta_k_col_name] ** m[i])
-                        df[delta_a_col] = df[paris_col] * ciclos_acumulados
-                        df[a_final_header] = 100 + (df[delta_a_col] * 1000)
-                        
+                        df[paris_col] = C[i] * (df[dk_col] ** m[i])
+                        df[delta_a_col] = df[paris_col] * df[ciclos_col]
+                        df[a_final_header] = 100 + (df[delta_a_col].cumsum() * 1000)
+
                         paris_cols.extend([paris_col, delta_a_col])
                         a_final_cols.append(a_final_header)
-                    
-                    # Calcular la columna Dias
+
+                    # Calcular días fraccionados
+                    last_day_val = 0
+                    if sheet in last_valid_rows and 'Dias' in last_valid_rows[sheet].columns:
+                        val = pd.to_numeric(last_valid_rows[sheet]['Dias'].iloc[0], errors='coerce')
+                        last_day_val = np.nan_to_num(val, nan=0.0)
+
                     N = len(df)
                     if N > 0:
-                        current_day_integer = ciclo_inicial + ciclo
-                        df['Dias'] = current_day_integer + (np.arange(1, N + 1) / N)
+                        df['Dias'] = last_day_val + (np.arange(1, N + 1) / N)
                     else:
                         df['Dias'] = None
 
-                    df['Ciclos Acumulados'] = ciclos_acumulados
+                    # Reordenar columnas
+                    final_order = [col for col in original_columns if col not in paris_cols + a_final_cols + ['Dias', 'Ciclos Acumulados']]
+                    final_order.extend(paris_cols)
+                    final_order.append('Dias')
+                    final_order.extend(a_final_cols)
+                    final_order.append('Ciclos Acumulados')
+                    df = df[final_order]
+                    df.insert(0, 'Fecha', [fecha_str] + [''] * (len(df) - 1))
 
-                    # Definir el orden final de las columnas
-                    final_columns = original_columns + paris_cols + ['Dias'] + a_final_cols + ['Ciclos Acumulados']
-                    df = df[final_columns]
+                    if sheet not in delta_sheets: delta_sheets[sheet] = []
+                    delta_sheets[sheet].append((df, ciclo_actual == 0 and not fechas_existentes))
 
-                    # Insertar columna 'Fecha' al inicio
-                    fecha_col = [fecha_str] + [None]*(len(df)-1)
-                    df.insert(0, 'Fecha', fecha_col)
-                    if sheet not in delta_sheets:
-                        delta_sheets[sheet] = []
-                    
-                    is_first_ever_write = (ciclo == 0 and not fechas_existentes)
-                    delta_sheets[sheet].append((df, is_first_ever_write))
                     last_valid_rows[sheet] = df.iloc[[-1]].copy()
-            ciclo += 1
+
+            ciclo_actual += 1
         except Exception as e:
             log_func(f"Error procesando {ruta}: {e}")
             log_func(traceback.format_exc())
 
-    # Escribir al archivo concatenado
-    from openpyxl.styles import Font
-    if os.path.exists(concat_file):
-        with pd.ExcelWriter(concat_file, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-            # Hoja archivo
-            df_archivo = pd.DataFrame(archivo_rows, columns=["", "Fecha", "Archivo", "Dirección Almacenamiento"])
-            df_archivo.to_excel(writer, sheet_name="archivo", index=False, header=False, startrow=writer.sheets["archivo"].max_row)
-            # Hojas delta (con columna Fecha)
-            for sheet, dfs in delta_sheets.items():
-                df_list = [df for df, _ in dfs]
-                df = pd.concat(df_list, ignore_index=True)
-                startrow = writer.sheets[sheet].max_row
-                df.to_excel(writer, sheet_name=sheet, index=False, header=False, startrow=startrow)
-        # Formato negrita y subrayado para la celda de fecha si ciclo==0
-        wb = load_workbook(concat_file)
-        for sheet, dfs in delta_sheets.items():
-            ws = wb[sheet]
-            row_offset = ws.max_row - sum(len(df) for df, _ in dfs) + 1
-            for df, is_ciclo0 in dfs:
-                if is_ciclo0:
-                    ws[f'A{row_offset}'].font = Font(bold=True, underline="single")
-                row_offset += len(df)
-        wb.save(concat_file)
-    else:
-        with pd.ExcelWriter(concat_file, engine="openpyxl") as writer:
-            pd.DataFrame(archivo_rows, columns=["", "Fecha", "Archivo", "Dirección Almacenamiento"]).to_excel(writer, sheet_name="archivo", index=False)
-            for sheet, dfs in delta_sheets.items():
-                df_list = [df for df, _ in dfs]
-                df = pd.concat(df_list, ignore_index=True)
-                df.to_excel(writer, sheet_name=sheet, index=False)
-        # Formato negrita y subrayado para la celda de fecha si ciclo==0
-        wb = load_workbook(concat_file)
-        for sheet, dfs in delta_sheets.items():
-            ws = wb[sheet]
-            row_offset = 2  # 1-based, primera fila después del header
-            for df, is_ciclo0 in dfs:
-                if is_ciclo0:
-                    ws[f'A{row_offset}'].font = Font(bold=True, underline="single")
-                row_offset += len(df)
-        wb.save(concat_file)
-    log_func(f"Concatenación completada. Archivos agregados: {len(files)}")
+    if not archivo_rows:
+        log_func("No se procesaron filas nuevas.")
+        return
 
-if __name__ == "__main__":
-    excel_folder = input("Carpeta de excels de salida: ").strip()
-    concat_file = os.path.join(excel_folder, "concatenado.xlsx")
-    concat_excels(excel_folder, concat_file)
+    mode = 'a' if os.path.exists(concat_file) else 'w'
+    if_sheet_exists = 'overlay' if mode == 'a' else None
+
+    try:
+        with pd.ExcelWriter(concat_file, engine="openpyxl", mode=mode, if_sheet_exists=if_sheet_exists) as writer:
+            df_archivo_to_write = pd.DataFrame(archivo_rows)
+            header = False if mode == 'a' and "archivo" in writer.sheets else True
+            startrow = writer.sheets['archivo'].max_row if mode == 'a' and "archivo" in writer.sheets else 0
+            df_archivo_to_write.to_excel(writer, sheet_name="archivo", index=False, header=header, startrow=startrow)
+
+            for sheet, dfs in delta_sheets.items():
+                df_to_write = pd.concat([d for d, _ in dfs], ignore_index=True)
+                header = False if (mode == 'a' and sheet in writer.sheets) else True
+                startrow = writer.sheets[sheet].max_row if (mode == 'a' and sheet in writer.sheets) else 0
+                df_to_write.to_excel(writer, sheet_name=sheet, index=False, header=header, startrow=startrow)
+
+        log_func(f"Concatenación completada. {len(files)} archivos procesados.")
+    except Exception as e:
+        log_func(f"Error al escribir en el archivo Excel: {e}")
+        log_func(traceback.format_exc())
+    return
