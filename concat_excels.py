@@ -132,20 +132,27 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, confirm_continue_
         log_func("No hay archivos nuevos para agregar.")
         return
 
-    # Obtener rango completo de fechas
-    fechas_rango = [x[0] for x in all_files if x[0] >= files[0][0] and x[0] <= files[-1][0]]
+    # Generar rango completo de días calendario entre el primer y último archivo
+    from datetime import timedelta
     fechas_archivos = {d: f for d, f in files}
     archivo_rows = []
     delta_sheets = {}
     ciclo_actual = 0
-    # Para cada fecha en el rango
-    for d in fechas_rango:
-        if d in fechas_archivos:
-            f = fechas_archivos[d]
+    # Convertir tupla de fecha a objeto datetime
+    fecha_inicio = datetime(2000 + files[0][0][0], files[0][0][1], files[0][0][2])
+    fecha_fin = datetime(2000 + files[-1][0][0], files[-1][0][1], files[-1][0][2])
+    dias_totales = (fecha_fin - fecha_inicio).days + 1
+    # Crear lista de todas las fechas en el rango
+    fechas_rango = [fecha_inicio + timedelta(days=i) for i in range(dias_totales)]
+    # Mapeo de fechas a tuplas
+    fechas_rango_tuplas = [(f.year - 2000, f.month, f.day) for f in fechas_rango]
+    for d_tuple, d_dt in zip(fechas_rango_tuplas, fechas_rango):
+        if d_tuple in fechas_archivos:
+            f = fechas_archivos[d_tuple]
             ruta = os.path.join(excel_folder, f)
             try:
                 xls = pd.ExcelFile(ruta)
-                fecha_str = f"{d[0]}.{d[1]}.{d[2]}"
+                fecha_str = f"{d_tuple[0]}.{d_tuple[1]}.{d_tuple[2]}"
                 archivo_rows.append({
                     "": ciclo_inicial + ciclo_actual,
                     "Fecha": fecha_str,
@@ -158,17 +165,22 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, confirm_continue_
                         original_columns = df.columns.tolist()
                         ciclos_col = find_column_name(df, ['Ciclos', 'ciclos'])
                         dk_col = find_column_name(df, ['ΔK', 'delta K', 'dK'])
-                        # Solo C1 y C2
                         paris_cols, a_final_cols = [], []
-                        for i in range(2):
+                        for i in range(5):
                             paris_col = f'C{i+1}(ΔK)^m{i+1}'
                             delta_a_col = f'Δa{i+1}'
                             a_final_header = f'C{i+1}={C[i]}'
                             df[paris_col] = C[i] * (pd.to_numeric(df.get(dk_col, 0), errors='coerce').fillna(0) ** m[i])
                             df[delta_a_col] = df[paris_col] * pd.to_numeric(df.get(ciclos_col, 0), errors='coerce').fillna(0)
-                            df[a_final_header] = 100 + (df[delta_a_col].cumsum() * 1000)
+                            # Solo agregar columna a_final_header para C1 y C2
+                            if i < 2:
+                                prev_a_final = 100
+                                if sheet in last_valid_rows and a_final_header in last_valid_rows[sheet].columns:
+                                    val = pd.to_numeric(last_valid_rows[sheet][a_final_header].iloc[0], errors='coerce')
+                                    prev_a_final = np.nan_to_num(val, nan=100.0)
+                                df[a_final_header] = prev_a_final + (df[delta_a_col].cumsum() * 1000)
+                                a_final_cols.append(a_final_header)
                             paris_cols.extend([paris_col, delta_a_col])
-                            a_final_cols.append(a_final_header)
                         # Recuperar ciclos acumulados previos
                         last_ciclos_acum = 0
                         if sheet in last_valid_rows and 'Ciclos Acumulados' in last_valid_rows[sheet].columns:
@@ -185,9 +197,20 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, confirm_continue_
                             last_day_val = np.nan_to_num(val, nan=0.0)
                         N = len(df)
                         if N > 0:
-                            df['Dias'] = last_day_val + (np.arange(1, N + 1) / N)
+                            # Usar el valor de la última fila agregada en delta_sheets[sheet] como acumulador inicial
+                            if sheet in delta_sheets and len(delta_sheets[sheet]) > 0:
+                                last_df, _ = delta_sheets[sheet][-1]
+                                last_dias = pd.to_numeric(last_df['Dias'].iloc[-1], errors='coerce')
+                                df['Dias'] = last_dias + (np.arange(1, N + 1) / N)
+                            else:
+                                df['Dias'] = last_day_val + (np.arange(1, N + 1) / N)
                         else:
-                            df['Dias'] = last_day_val
+                            if sheet in delta_sheets and len(delta_sheets[sheet]) > 0:
+                                last_df, _ = delta_sheets[sheet][-1]
+                                last_dias = pd.to_numeric(last_df['Dias'].iloc[-1], errors='coerce')
+                                df['Dias'] = last_dias
+                            else:
+                                df['Dias'] = last_day_val
                         # Reordenar columnas
                         final_order = [col for col in original_columns if col not in paris_cols + a_final_cols + ['Dias', 'Ciclos Acumulados']]
                         final_order.extend(paris_cols)
@@ -204,8 +227,8 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, confirm_continue_
                 log_func(f"Error procesando {ruta}: {e}")
                 log_func(traceback.format_exc())
         else:
-            # Día sin archivo: agregar fila vacía con valores acumulados constantes
-            fecha_str = f"{d[0]}.{d[1]}.{d[2]}"
+            # Día sin archivo: aplicar la misma lógica que para archivos vacíos
+            fecha_str = f"{d_tuple[0]}.{d_tuple[1]}.{d_tuple[2]}"
             archivo_rows.append({
                 "": ciclo_inicial + ciclo_actual,
                 "Fecha": fecha_str,
@@ -213,14 +236,25 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, confirm_continue_
                 "Dirección Almacenamiento": ""
             })
             for sheet in last_valid_rows:
-                # Crear df vacío con valores acumulados constantes
+                # Copiar última fila válida y poner en cero mediciones y Paris, igual que para archivos vacíos
                 prev_row = last_valid_rows[sheet].copy()
                 empty_row = prev_row.copy()
-                for col in empty_row.columns:
-                    if col not in ['Fecha', 'Ciclos Acumulados', 'Dias']:
-                        empty_row[col] = ""
                 empty_row['Fecha'] = fecha_str
-                if sheet not in delta_sheets: delta_sheets[sheet] = []
+                if 'Dias' in prev_row.columns:
+                    # Para días sin archivo, tomar el valor de la celda 'Dias' de la fila anterior en el DataFrame resultante y sumarle 1
+                    # Buscar la última fila agregada en delta_sheets[sheet] y tomar su valor de 'Dias'
+                    if sheet in delta_sheets and len(delta_sheets[sheet]) > 0:
+                        last_df, _ = delta_sheets[sheet][-1]
+                        last_dias = pd.to_numeric(last_df['Dias'].iloc[-1], errors='coerce')
+                        empty_row['Dias'] = int(np.ceil(last_dias)) + 1
+                    else:
+                        last_day_val = pd.to_numeric(prev_row['Dias'].iloc[0], errors='coerce')
+                        empty_row['Dias'] = int(np.ceil(last_day_val)) + 1
+                for col in empty_row.columns:
+                    if col not in ['Fecha', 'Dias', 'Ciclos Acumulados'] and not col.startswith('C1=') and not col.startswith('C2='):
+                        empty_row[col] = 0
+                if sheet not in delta_sheets:
+                    delta_sheets[sheet] = []
                 delta_sheets[sheet].append((empty_row, False))
             ciclo_actual += 1
 
