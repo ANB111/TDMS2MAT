@@ -144,12 +144,15 @@ def main(config: Dict[str, Any], log_callback: Optional[Callable[[str], None]] =
         log("ERROR: No se pudo configurar las carpetas necesarias. Abortando.", logging.ERROR)
         return False
     
-    # Validar archivos seleccionados
-    if not selected_files:
+    # Validar archivos seleccionados solo cuando son necesarios
+    if descomprimir and not selected_files:
         log("ADVERTENCIA: No se han seleccionado archivos para procesar.", logging.WARNING)
         return False
-    
-    log(f"Se procesarán {len(selected_files)} archivos")
+
+    if selected_files:
+        log(f"Se procesarán {len(selected_files)} archivos")
+    else:
+        log("No se seleccionaron archivos; se ejecutarán únicamente las etapas que no dependen de ellos.", logging.INFO)
     
     # Proceso por etapas
     stages = []

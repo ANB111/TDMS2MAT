@@ -1,7 +1,10 @@
 import os
+import sys
 import json
+from pathlib import Path
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
+import tkinter as tk
 from tkinter import filedialog, messagebox, StringVar, IntVar, BooleanVar, Listbox, END
 from threading import Thread, Event
 from main import main
@@ -9,6 +12,8 @@ import logging
 import tkinter.simpledialog as sd
 
 CONFIG_FILE = "config.json"
+BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+ICON_PATH = BASE_DIR / "icon.png"
 
 class App:
     def prompt_start_date(self, min_date, max_date):
@@ -57,24 +62,30 @@ class App:
 
             # Validar rango
             if isinstance(min_date, tuple):
-                min_date_dt = datetime(year=2000+min_date[0], month=min_date[1], day=min_date[2])
+                min_date_dt = datetime(year=2000 + min_date[0], month=min_date[1], day=min_date[2])
             else:
                 min_date_dt = min_date
             if isinstance(max_date, tuple):
-                max_date_dt = datetime(year=2000+max_date[0], month=max_date[1], day=max_date[2])
+                max_date_dt = datetime(year=2000 + max_date[0], month=max_date[1], day=max_date[2])
             else:
                 max_date_dt = max_date
-            
-            parsed_dt = datetime(year=2000+parsed[0], month=parsed[1], day=parsed[2])
+
+            parsed_dt = datetime(year=2000 + parsed[0], month=parsed[1], day=parsed[2])
 
             if parsed_dt < min_date_dt:
-                messagebox.showinfo("Info", f"La fecha ingresada es anterior al archivo más antiguo. Se usará {date_to_str(min_date)}.")
+                messagebox.showinfo(
+                    "Info",
+                    f"La fecha ingresada es anterior al archivo más antiguo. Se usará {date_to_str(min_date)}.",
+                )
                 if isinstance(min_date, datetime):
-                    return (min_date.year-2000, min_date.month, min_date.day)
+                    return (min_date.year - 2000, min_date.month, min_date.day)
                 else:
                     return min_date
             elif parsed_dt > max_date_dt:
-                messagebox.showerror("Error", "La fecha ingresada es posterior al archivo más reciente.")
+                messagebox.showerror(
+                    "Error",
+                    "La fecha ingresada es posterior al archivo más reciente.",
+                )
             else:
                 return parsed
     def __init__(self, root):
@@ -86,6 +97,8 @@ class App:
         # Configurar logging
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
         self.logger = logging.getLogger(__name__)
+
+        self._set_window_icon()
 
         # Flag para “desde último”
         self.use_last = BooleanVar(value=False)
@@ -422,6 +435,26 @@ class App:
         ttk.Button(bf, text="Procesar Archivos", command=self.start, bootstyle="success-outline").grid(row=0, column=0, padx=5)
         ttk.Button(bf, text="Cancelar", command=self.stop_event.set, bootstyle="danger-outline").grid(row=0, column=1, padx=5)
         ttk.Button(bf, text="⚙️", command=self.open_advanced_config, bootstyle="info-outline").grid(row=0, column=2, padx=5)
+
+    def _set_window_icon(self):
+        if not ICON_PATH.exists():
+            self.logger.info("Icono no encontrado en %s", ICON_PATH)
+            return
+        try:
+            self.root.iconbitmap(default=str(ICON_PATH))
+        except Exception as err:  # pylint: disable=broad-except
+            self.logger.warning("No se pudo establecer el icono con iconbitmap: %s", err)
+        if ICON_PATH.suffix.lower() in {".png", ".gif"}:
+            try:
+                self._icon_image = tk.PhotoImage(file=str(ICON_PATH))
+                self.root.iconphoto(False, self._icon_image)
+            except Exception as err:  # pylint: disable=broad-except
+                self.logger.warning("No se pudo establecer el icono con iconphoto: %s", err)
+        else:
+            self.logger.debug(
+                "iconphoto omitido: formato '%s' no soportado directamente por Tk",
+                ICON_PATH.suffix,
+            )
 
     def open_advanced_config(self):
         advanced_window = ttk.Toplevel(self.root)

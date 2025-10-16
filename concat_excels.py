@@ -258,11 +258,13 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, confirm_continue_
                 delta_sheets[sheet].append((empty_row, False))
             ciclo_actual += 1
 
-    mode = 'a' if os.path.exists(concat_file) else 'w'
+    output_path = os.path.join(os.path.dirname(concat_file), "estimacion-avance-fisuras.xlsx")
+
+    mode = 'a' if os.path.exists(output_path) else 'w'
     if_sheet_exists = 'overlay' if mode == 'a' else None
 
     try:
-        with pd.ExcelWriter(concat_file, engine="openpyxl", mode=mode, if_sheet_exists=if_sheet_exists) as writer:
+        with pd.ExcelWriter(output_path, engine="openpyxl", mode=mode, if_sheet_exists=if_sheet_exists) as writer:
             df_archivo_to_write = pd.DataFrame(archivo_rows)
             header = False if mode == 'a' and "archivo" in writer.sheets else True
             startrow = writer.sheets['archivo'].max_row if mode == 'a' and "archivo" in writer.sheets else 0
@@ -274,7 +276,7 @@ def concat_excels(excel_folder, concat_file, prompt_func=None, confirm_continue_
                 startrow = writer.sheets[sheet].max_row if (mode == 'a' and sheet in writer.sheets) else 0
                 df_to_write.to_excel(writer, sheet_name=sheet, index=False, header=header, startrow=startrow)
 
-        log_func(f"Concatenación completada. {len(files)} archivos procesados.")
+        log_func(f"Concatenación completada. {len(files)} archivos procesados. Archivo de salida: {output_path}")
     except Exception as e:
         log_func(f"Error al escribir en el archivo Excel: {e}")
         log_func(traceback.format_exc())
