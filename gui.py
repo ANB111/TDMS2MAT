@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, StringVar, IntVar, BooleanVar, Listbox, END
 from threading import Thread, Event
 from main import main
+from tdms_to_mat_simple import procesar_tdms_a_mat, obtener_info_tdms
 import logging
 import tkinter.simpledialog as sd
 
@@ -112,6 +113,8 @@ class App:
             "ruta_matlab_script": StringVar(),
             "matlab_path": StringVar(),
             "ruta_guardado_graficos": StringVar(),
+            "tdms_input_folder": StringVar(),
+            "tdms_output_folder": StringVar(),
             "FS": IntVar(value=10),
             "descomprimir": BooleanVar(value=True),
             "n_channels": IntVar(value=16),
@@ -120,7 +123,8 @@ class App:
             "rainflow": BooleanVar(value=False),
             "realizar_conteo": BooleanVar(value=False),
             "concatenar_excels": BooleanVar(value=False),
-            "graficos_matlab": BooleanVar(value=False)
+            "graficos_matlab": BooleanVar(value=False),
+            "eliminar_tdms_original": BooleanVar(value=False)
         }
 
         self.stop_event = Event()
@@ -315,19 +319,139 @@ class App:
 
         self.root.after(0, _update_log)
 
+    def start_tdms_to_mat_simple(self):
+        """Inicia la conversión directa de TDMS a MAT (sin agrupar por días)."""
+        tdms_input = self.config["tdms_input_folder"].get()
+        tdms_output = self.config["tdms_output_folder"].get()
+        
+        if not tdms_input:
+            messagebox.showerror("Error", "Debe seleccionar la carpeta de entrada TDMS.")
+            return
+        if not tdms_output:
+            messagebox.showerror("Error", "Debe seleccionar la carpeta de salida MAT.")
+            return
+        if not os.path.isdir(tdms_input):
+            messagebox.showerror("Error", f"La carpeta de entrada no existe: {tdms_input}")
+            return
+
+        # Contar archivos TDMS (ignorar .tdms_index)
+        try:
+            todos_archivos = os.listdir(tdms_input)
+            archivos_tdms = [f for f in todos_archivos 
+                             if f.lower().endswith('.tdms') 
+                             and not f.lower().endswith('.tdms_index')]
+            if not archivos_tdms:
+                messagebox.showwarning("Advertencia", "No se encontraron archivos TDMS en la carpeta seleccionada.")
+                return
+            
+            if not messagebox.askyesno("Confirmar", 
+                f"Se encontraron {len(archivos_tdms)} archivos TDMS.\n¿Desea iniciar la conversión?"):
+                return
+        except Exception as e:
+            messagebox.showerror("Error", f"No se puede leer la carpeta: {e}")
+            return
+
+        self.save_config()
+        self.stop_event.clear()
+        
+        # Configurar barra de progreso en modo determinado
+        self.progress.config(mode="determinate", maximum=len(archivos_tdms), value=0)
+        self.log_text.delete("1.0", "end")
+        
+        def update_progress(actual, total):
+            """Actualiza la barra de progreso en el hilo principal."""
+            def _update():
+                if self.root.winfo_exists():
+                    self.progress.config(value=actual)
+                    porcentaje = int((actual / total) * 100) if total > 0 else 0
+                    self.root.title(f"Procesador TDMS - {porcentaje}% ({actual}/{total})")
+            self.root.after(0, _update)
+        
+        def run_conversion():
+            try:
+                eliminar = self.config["eliminar_tdms_original"].get()
+                resultado = procesar_tdms_a_mat(
+                    carpeta_entrada=tdms_input,
+                    carpeta_salida=tdms_output,
+                    eliminar_original=eliminar,
+                    num_workers=4,
+                    ajuste_zona_horaria=0,
+                    log_callback=self.log_message,
+                    stop_event=self.stop_event,
+                    progress_callback=update_progress
+                )
+                
+                # Mostrar resumen final
+                if resultado:
+                    if resultado['fallidos'] > 0:
+                        self.log_message(f"⚠ Hubo {resultado['fallidos']} archivo(s) con errores.")
+                    if resultado['exitosos'] == resultado['total']:
+                        self.log_message("✓ Todos los archivos se convirtieron correctamente.")
+                        
+            except Exception as e:
+                self.log_message(f"ERROR: {e}")
+                import traceback
+                self.log_message(traceback.format_exc())
+            finally:
+                def reset_ui():
+                    if self.root.winfo_exists():
+                        self.progress.config(mode="indeterminate", value=0)
+                        self.root.title("Procesador de Archivos TDMS")
+                self.root.after(0, reset_ui)
+        
+        Thread(target=run_conversion, daemon=True).start()
+
     def save_config(self):
-        data = {k:v.get() for k,v in self.config.items()}
-        data["selected_files"] = self.selected_files
-        with open(CONFIG_FILE,"w") as f:
-            json.dump(data,f,indent=4)
+        """Guarda la configuración de forma segura."""
+        try:
+            data = {k: v.get() for k, v in self.config.items()}
+            data["selected_files"] = self.selected_files
+            
+            # Guardar en archivo temporal primero, luego renombrar (atomic write)
+            temp_file = CONFIG_FILE + ".tmp"
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+            
+            # Renombrar (más seguro contra corrupción)
+            if os.path.exists(CONFIG_FILE):
+                backup = CONFIG_FILE + ".bak"
+                if os.path.exists(backup):
+                    os.remove(backup)
+                os.rename(CONFIG_FILE, backup)
+            os.rename(temp_file, CONFIG_FILE)
+            
+        except Exception as e:
+            self.logger.error(f"Error guardando configuración: {e}")
 
     def load_config(self):
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE) as f:
-                data = json.load(f)
-            for k in self.config:
-                if k in data:
-                    self.config[k].set(data[k])
+        """Carga la configuración de forma segura."""
+        config_to_load = CONFIG_FILE
+        
+        # Si el config principal está corrupto, intentar con backup
+        if not os.path.exists(CONFIG_FILE) and os.path.exists(CONFIG_FILE + ".bak"):
+            config_to_load = CONFIG_FILE + ".bak"
+            self.logger.warning("Usando archivo de configuración de respaldo")
+        
+        if os.path.exists(config_to_load):
+            try:
+                with open(config_to_load, encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                for k in self.config:
+                    if k in data:
+                        try:
+                            self.config[k].set(data[k])
+                        except Exception as e:
+                            self.logger.warning(f"No se pudo cargar config '{k}': {e}")
+                            
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Error de formato en configuración: {e}")
+                messagebox.showwarning(
+                    "Advertencia", 
+                    "El archivo de configuración está corrupto. Se usarán valores por defecto."
+                )
+            except Exception as e:
+                self.logger.error(f"Error cargando configuración: {e}")
 
     def toggle_processing_options(self):
         if self.config["descomprimir"].get():
@@ -341,6 +465,67 @@ class App:
             self.rainflow_cb.config(state="disabled")
             self.graficos_matlab_cb.config(state="disabled")
             self.incompletos_cb.config(state="disabled")
+
+    def preview_tdms_structure(self):
+        """Muestra la estructura de un archivo TDMS de ejemplo."""
+        tdms_input = self.config["tdms_input_folder"].get()
+        
+        if not tdms_input or not os.path.isdir(tdms_input):
+            messagebox.showerror("Error", "Seleccione una carpeta de entrada TDMS válida.")
+            return
+        
+        # Buscar archivos TDMS (ignorar .tdms_index)
+        todos_archivos = os.listdir(tdms_input)
+        archivos_tdms = [f for f in todos_archivos 
+                         if f.lower().endswith('.tdms') 
+                         and not f.lower().endswith('.tdms_index')]
+        archivos_index = len([f for f in todos_archivos if f.lower().endswith('.tdms_index')])
+        
+        if not archivos_tdms:
+            messagebox.showinfo("Info", "No se encontraron archivos TDMS en la carpeta.")
+            return
+        
+        # Tomar el primer archivo como ejemplo
+        archivo_ejemplo = os.path.join(tdms_input, archivos_tdms[0])
+        
+        self.log_message(f"[Vista Previa] Analizando: {archivos_tdms[0]}")
+        
+        def analyze():
+            try:
+                info = obtener_info_tdms(archivo_ejemplo)
+                
+                if 'error' in info:
+                    self.log_message(f"[Vista Previa] Error: {info['error']}")
+                    return
+                
+                self.log_message(f"[Vista Previa] ════════════════════════════════════════")
+                self.log_message(f"[Vista Previa] Archivo: {info['archivo']}")
+                self.log_message(f"[Vista Previa] Tamaño: {info.get('tamano_mb', '?')} MB")
+                self.log_message(f"[Vista Previa] Grupos encontrados: {len(info['grupos'])}")
+                
+                for grupo in info['grupos']:
+                    self.log_message(f"[Vista Previa]   📁 Grupo: '{grupo['nombre']}'")
+                    for canal in grupo['canales']:
+                        self.log_message(
+                            f"[Vista Previa]      📊 {canal['nombre']} "
+                            f"(tipo: {canal['dtype']}, filas: {canal['longitud']:,})"
+                        )
+                
+                total_canales = sum(len(g['canales']) for g in info['grupos'])
+                self.log_message(f"[Vista Previa] Total de canales: {total_canales}")
+                self.log_message(f"[Vista Previa] ════════════════════════════════════════")
+                self.log_message(f"[Vista Previa] Archivos TDMS en carpeta: {len(archivos_tdms)}")
+                if archivos_index > 0:
+                    self.log_message(f"[Vista Previa] Archivos .tdms_index (se ignorarán): {archivos_index}")
+                
+            except Exception as e:
+                self.log_message(f"[Vista Previa] Error analizando archivo: {e}")
+        
+        Thread(target=analyze, daemon=True).start()
+
+    def clear_log(self):
+        """Limpia el registro de actividad."""
+        self.log_text.delete("1.0", "end")
 
     def create_widgets(self):
         self.root.columnconfigure(0, weight=1)
@@ -419,9 +604,48 @@ class App:
 
         ttk.Checkbutton(pf3, text="Concatenar Excels", variable=self.config["concatenar_excels"], bootstyle="round-toggle").grid(row=2, column=1, sticky="w", pady=2)
 
+        # Conversión Directa TDMS a MAT
+        tdms_frame = ttk.Labelframe(mf, text="Conversión Directa TDMS → MAT (archivos sin comprimir)", padding=10)
+        tdms_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=5)
+        tdms_frame.columnconfigure(1, weight=1)
+        
+        # Descripción
+        ttk.Label(
+            tdms_frame, 
+            text="Convierte archivos .tdms directamente a .mat, respetando fecha/hora y columnas originales.",
+            font=("", 9, "italic")
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=5, pady=(0, 5))
+        
+        self.create_folder_input(tdms_frame, "Carpeta TDMS entrada:", "tdms_input_folder", 1)
+        self.create_folder_input(tdms_frame, "Carpeta MAT salida:", "tdms_output_folder", 2)
+        
+        tdms_options_frame = ttk.Frame(tdms_frame)
+        tdms_options_frame.grid(row=3, column=0, columnspan=3, pady=5, sticky="w")
+        
+        ttk.Checkbutton(
+            tdms_options_frame, 
+            text="Eliminar archivos TDMS originales después de convertir", 
+            variable=self.config["eliminar_tdms_original"], 
+            bootstyle="round-toggle"
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            tdms_options_frame, 
+            text="👁 Vista previa", 
+            command=self.preview_tdms_structure, 
+            bootstyle="info-outline"
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            tdms_options_frame, 
+            text="Convertir TDMS a MAT", 
+            command=self.start_tdms_to_mat_simple, 
+            bootstyle="warning-outline"
+        ).pack(side="left", padx=20)
+
         # Log
         lf = ttk.Labelframe(mf, text="Registro de Actividad", padding=10)
-        lf.grid(row=5, column=0, columnspan=2, sticky="nsew", pady=5)
+        lf.grid(row=6, column=0, columnspan=2, sticky="nsew", pady=5)
         lf.rowconfigure(0, weight=1); lf.columnconfigure(0, weight=1)
         self.log_text = ttk.Text(lf, wrap="word", height=10)
         self.log_text.grid(sticky="nsew")
@@ -429,12 +653,13 @@ class App:
 
         # Progreso y botones
         self.progress = ttk.Progressbar(mf, mode="indeterminate", bootstyle="info-striped")
-        self.progress.grid(row=6, column=0, columnspan=2, sticky="ew", pady=5)
+        self.progress.grid(row=7, column=0, columnspan=2, sticky="ew", pady=5)
         bf = ttk.Frame(mf)
-        bf.grid(row=7, column=0, columnspan=2, sticky="ew", pady=5)
+        bf.grid(row=8, column=0, columnspan=2, sticky="ew", pady=5)
         ttk.Button(bf, text="Procesar Archivos", command=self.start, bootstyle="success-outline").grid(row=0, column=0, padx=5)
         ttk.Button(bf, text="Cancelar", command=self.stop_event.set, bootstyle="danger-outline").grid(row=0, column=1, padx=5)
-        ttk.Button(bf, text="⚙️", command=self.open_advanced_config, bootstyle="info-outline").grid(row=0, column=2, padx=5)
+        ttk.Button(bf, text="🗑 Limpiar Log", command=self.clear_log, bootstyle="secondary-outline").grid(row=0, column=2, padx=5)
+        ttk.Button(bf, text="⚙️", command=self.open_advanced_config, bootstyle="info-outline").grid(row=0, column=3, padx=5)
 
     def _set_window_icon(self):
         if not ICON_PATH.exists():
