@@ -28,11 +28,27 @@ def compare_excel_files(file1, file2):
             df1 = xls1[sheet_name]
             df2 = xls2[sheet_name]
 
-            # Llenar valores NaN con un valor consistente para la comparación
-            df1_filled = df1.fillna('-')
-            df2_filled = df2.fillna('-')
+            if df1.shape != df2.shape:
+                print(f"\n[DIFERENTES] {os.path.basename(file1)}: La hoja '{sheet_name}' tiene distinto número de filas/columnas.")
+                return False
 
-            if not df1_filled.equals(df2_filled):
+            if list(df1.columns) != list(df2.columns):
+                print(f"\n[DIFERENTES] {os.path.basename(file1)}: La hoja '{sheet_name}' tiene columnas distintas.")
+                return False
+
+            # Comparar con tolerancia numérica para evitar falsos positivos por
+            # diferencias de precisión flotante entre archivos Excel.
+            # check_dtype=False permite comparar int64 vs float64 como equivalentes.
+            try:
+                pd.testing.assert_frame_equal(
+                    df1.reset_index(drop=True),
+                    df2.reset_index(drop=True),
+                    check_exact=False,
+                    rtol=1e-9,
+                    check_dtype=False,
+                    check_names=True,
+                )
+            except AssertionError:
                 print(f"\n[DIFERENTES] {os.path.basename(file1)}: El contenido de la hoja '{sheet_name}' es diferente.")
                 return False
 
@@ -49,8 +65,8 @@ def compare_excel_files(file1, file2):
 if __name__ == "__main__":
 
 
-    folder1 = r"C:\Users\BECARIO 8\Documents\TDMS2MAT\ejecucuion consola\salida_excels"
-    folder2 = r"C:\Users\BECARIO 8\Documents\TDMS2MAT\salida_excels"
+    folder1 = r"D:\Carpeta Becario 19\Nueva carpeta (2)\TDMS2MAT\salida_excels"
+    folder2 = r"D:\Carpeta Becario 19\Nueva carpeta (2)\TDMS2MAT\salida_excels\original"
 
     if not os.path.isdir(folder1):
         print(f"Error: La carpeta no existe - {folder1}")

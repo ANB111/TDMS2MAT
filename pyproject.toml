@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "tdms2mat"
+version = "1.0.0"
+description = "Pipeline de procesamiento TDMS → MAT con análisis de rainflow y conteo de arranques/paradas"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Becario 19" }]
+
+dependencies = [
+    "nptdms>=1.4,<2.0",
+    "pandas>=1.5,<3.0",
+    "scipy>=1.9,<2.0",
+    "numpy>=1.23,<2.0",
+    "ttkbootstrap>=1.10,<2.0",
+    "openpyxl>=3.1,<4.0",
+    "pydantic>=2.0,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "mypy>=1.4",
+    "ruff>=0.1",
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+tdms2mat = "tdms2mat.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tdms2mat*"]
+
+# ---------------------------------------------------------------------------
+# Ruff (linter + formatter — reemplaza flake8, isort, black)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+# ---------------------------------------------------------------------------
+# Mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.8"
+ignore_missing_imports = true
+warn_return_any = false
+warn_unused_ignores = true
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

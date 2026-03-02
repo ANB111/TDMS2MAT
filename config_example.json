@@ -1,20 +1,34 @@
 {
-    "input_folder": "C:/Users/Becario 4/Documents/TDMS2MAT/entrada",
-    "output_folder": "C:/Users/Becario 4/Documents/TDMS2MAT/salida",
-    "excel_output_folder": "C:/Users/Becario 4/Documents/TDMS2MAT/salida_excels",
-    "last_processed": "Prueba.zip",
-    "ruta_matlab_script": "C:/Users/Becario 4/Documents/TDMS2MAT",
-    "matlab_path": "C:/Program Files/Polyspace/R2021a/bin/matlab.exe",
-    "FS": 10,
-    "descomprimir": true,
+    "_comment": "Copia este archivo como config.json y ajusta los valores a tu entorno.",
+
+    "input_folder":        "C:/datos_tdms/zips",
+    "output_folder":       "C:/datos_tdms/salida",
+    "excel_output_folder": "C:/datos_tdms/excels",
+
+    "tdms_input_folder":  "C:/datos_tdms/tdms",
+    "tdms_output_folder": "C:/datos_tdms/mat_directo",
+
+    "matlab_path":          "C:/Program Files/MATLAB/R2023b/bin/matlab.exe",
+    "ruta_matlab_script":   "C:/proyectos/TDMS2MAT",
+    "ruta_guardado_graficos": "C:/datos_tdms/graficos",
+
+    "last_processed":  "",
+    "selected_files":  [],
+
+    "FS":         10,
     "n_channels": 16,
-    "unidad": "05",
-    "procesar_incompleto": true,
-    "rainflow": true,
-    "realizar_conteo": true,
-    "graficos_matlab": false,
-    "concatenar_excels": true,
-    "selected_files": [
-        "Prueba.zip"
-    ]
+    "unidad":     "05",
+
+    "timezone_offset_hours":  -3,
+    "csv_decimal_separator":  ".",
+
+    "descomprimir":          true,
+    "procesar_incompleto":   false,
+    "rainflow":              false,
+    "realizar_conteo":       false,
+    "concatenar_excels":     false,
+    "graficos_matlab":       false,
+    "eliminar_tdms_original": false,
+    "mostrar_salida_matlab": false,
+    "escritura":             true
 }

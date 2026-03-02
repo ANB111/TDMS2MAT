@@ -1,15 +1,61 @@
-\entrada
-\salida
-\salida_concatenada
-\salida_mat
-\temp
-\auxiliares
-\salida_excels
-\__pycache__
-__pycache__/rainflow_lib.cpython-311.pyc
-__pycache__/rainflow.cpython-311.pyc
-\config.json
-\build
-\dist
-\*.spec
+# Configuración local (contiene rutas privadas de cada máquina)
+config.json
+config.json.bak
+config.json.tmp
+
+# Carpetas de datos y salida
+entrada/
+salida/
+salida_excels/
+salida_concatenada/
+salida_mat/
+temp/
+ejecucuion consola/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+eggs/
+sdist/
+*.egg
+
+# PyInstaller
+*.spec
 TDMS2MAT_GUI.spec
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# IDEs
+.vscode/settings.json
+.idea/
+
+# Archivos de datos (no versionar)
+*.mat
+*.tdms
+*.tdms_index
+*.zip
+*.xlsx
+*.xls
+*.csv
+
+# Logs
+*.log
+processing.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Herramientas de calidad
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
