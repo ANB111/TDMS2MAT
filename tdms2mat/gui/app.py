@@ -16,9 +16,12 @@ Refactorizaciones respecto al original (gui.py):
 from __future__ import annotations
 
 import json
+import glob
 import logging
 import os
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 from queue import Queue, Empty
@@ -90,9 +93,12 @@ class App:
         self._pending_errors: List[str] = []
         # Estado de la barra de progreso
         self._stage_text: StringVar = StringVar(value="")
+        self._detail_text: StringVar = StringVar(value="")
         self._status_text: StringVar = StringVar(value="● Listo")
         self._run_start_time: float = 0.0
         self._elapsed_timer_id: Optional[str] = None
+        # Snapshot de archivos .mat existentes antes del run (para limpieza en cancelación)
+        self._mat_files_before: set = set()
 
         self._load_config()
         self._create_widgets()
@@ -299,10 +305,15 @@ class App:
                                         font=("TkDefaultFont", 9), bootstyle="secondary")
         self._elapsed_label.grid(row=0, column=1, sticky="e", padx=(10, 0))
 
+        # Fila de detalle por archivo
+        self._detail_label = ttk.Label(prog_frame, textvariable=self._detail_text,
+                                       font=("TkDefaultFont", 8), bootstyle="secondary")
+        self._detail_label.grid(row=1, column=0, sticky="w", pady=(0, 1))
+
         # Barra de progreso
         self.progress = ttk.Progressbar(prog_frame, mode="determinate",
                                         bootstyle="info-striped", maximum=1, value=0)
-        self.progress.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        self.progress.grid(row=2, column=0, sticky="ew", pady=(2, 0))
 
     def _build_action_bar(self, parent: ttk.Frame, row: int) -> None:
         bf = ttk.Frame(parent)
@@ -315,7 +326,7 @@ class App:
         self._btn_start.grid(row=0, column=0, padx=5)
 
         self._btn_cancel = ttk.Button(
-            bf, text="■  Cancelar", command=self.stop_event.set, bootstyle="danger-outline",
+            bf, text="■  Cancelar", command=self._cancel, bootstyle="danger-outline",
             state="disabled"
         )
         self._btn_cancel.grid(row=0, column=1, padx=5)
@@ -489,6 +500,17 @@ class App:
         self._save_config()
         self.stop_event.clear()
         self._pending_errors.clear()
+
+        # Snapshot: archivos .mat ya existentes antes del run (para limpiar si se cancela)
+        out_dir = self.config["output_folder"].get()
+        self._mat_files_before = set()
+        if os.path.isdir(out_dir):
+            self._mat_files_before = {
+                os.path.join(out_dir, f)
+                for f in os.listdir(out_dir)
+                if f.endswith(".mat")
+            }
+
         self._set_running_state(True)
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
@@ -516,12 +538,43 @@ class App:
                 self.log_message(f"Operación cancelada: {exc}")
                 return None
 
+        # Timestamp de inicio de la etapa actual; lista mutable para compartir
+        # entre los dos closures sin 'nonlocal'.
+        _stage_start: list[float] = [0.0]
+
         def on_progress(step: int, total: int, stage_name: str) -> None:
+            _stage_start[0] = time.time()  # reinicia el cronómetro de ETA
             def _upd() -> None:
                 if not self.root.winfo_exists():
                     return
                 self.progress.config(maximum=total, value=step)
                 self._stage_text.set(f"Etapa {step}/{total} — {stage_name}")
+                self._detail_text.set("")  # limpiar detalle al cambiar de etapa
+            self.root.after(0, _upd)
+
+        def on_file_progress(current: int, total: int, name: str) -> None:
+            """Actualiza detalle con progreso y ETA basado en promedio por archivo."""
+            # Calcular ETA en el hilo del pipeline (antes del after())
+            eta_str = ""
+            if current > 0 and _stage_start[0] > 0:
+                elapsed = time.time() - _stage_start[0]
+                avg_per_file = elapsed / current
+                remaining_secs = avg_per_file * (total - current)
+                if remaining_secs >= 3600:
+                    h = int(remaining_secs // 3600)
+                    m = int((remaining_secs % 3600) // 60)
+                    eta_str = f"  |  ETA: {h}h {m}m"
+                elif remaining_secs >= 60:
+                    m = int(remaining_secs // 60)
+                    s = int(remaining_secs % 60)
+                    eta_str = f"  |  ETA: {m}m {s}s"
+                elif remaining_secs > 0:
+                    eta_str = f"  |  ETA: {int(remaining_secs)}s"
+            detail = f"{current}/{total} — {name}{eta_str}"
+            def _upd() -> None:
+                if not self.root.winfo_exists():
+                    return
+                self._detail_text.set(detail)
             self.root.after(0, _upd)
 
         try:
@@ -532,6 +585,7 @@ class App:
                 prompt_func=prompt_func,
                 stop_event=self.stop_event,
                 progress_callback=on_progress,
+                file_progress_callback=on_file_progress,
             )
             if success and self.selected_files:
                 last = self.selected_files[-1]
@@ -541,6 +595,9 @@ class App:
         except Exception as exc:
             self.log_message(f"ERROR: {exc}")
         finally:
+            # Limpieza si fue cancelado
+            if self.stop_event.is_set():
+                self._cleanup_cancelled_run(cfg)
             self._set_running_state(False, success=success)
             # Mostrar errores acumulados al final (un solo popup)
             if self._pending_errors:
@@ -574,10 +631,12 @@ class App:
                 self._tick_elapsed()
                 self.progress.config(value=0, maximum=1)
                 self._stage_text.set("Preparando...")
+                self._detail_text.set("")
             else:
                 self._btn_start.config(state="normal")
                 self._btn_cancel.config(state="disabled")
                 self._stop_elapsed()
+                self._detail_text.set("")
                 if success:
                     self._status_text.set("● Completado")
                     self._status_indicator.config(bootstyle="success")
@@ -610,6 +669,59 @@ class App:
         if self._elapsed_timer_id:
             self.root.after_cancel(self._elapsed_timer_id)
             self._elapsed_timer_id = None
+
+    # ------------------------------------------------------------------
+    # Cancelación y limpieza
+    # ------------------------------------------------------------------
+
+    def _cancel(self) -> None:
+        """Muestra confirmación y cancela el procesamiento si el usuario acepta."""
+        if messagebox.askyesno(
+            "Cancelar procesamiento",
+            "¿Desea cancelar el procesamiento?\n"
+            "Se eliminarán todos los archivos generados durante esta sesión.",
+        ):
+            self.stop_event.set()
+
+    def _cleanup_cancelled_run(self, cfg: dict) -> None:
+        """Elimina archivos generados desde que se inició el procesamiento cancelado."""
+        self.log_message("[Limpieza] Eliminando archivos generados durante el procesamiento cancelado...")
+
+        # 1. Carpeta temporal de extracción/CSVs
+        temp_folder = os.path.join(tempfile.gettempdir(), "tdms2mat_temp")
+        if os.path.exists(temp_folder):
+            try:
+                shutil.rmtree(temp_folder)
+                self.log_message("[Limpieza] Carpeta temporal eliminada.")
+            except Exception as exc:
+                self.log_message(f"[Limpieza] No se pudo limpiar temp: {exc}")
+
+        # 2. Archivos .mat nuevos (no existían antes del run)
+        out_dir = cfg.get("output_folder", "")
+        if os.path.isdir(out_dir):
+            deleted = 0
+            for fname in os.listdir(out_dir):
+                if not fname.endswith(".mat"):
+                    continue
+                fp = os.path.join(out_dir, fname)
+                if fp not in self._mat_files_before:
+                    try:
+                        os.remove(fp)
+                        deleted += 1
+                    except Exception:
+                        pass
+            if deleted:
+                self.log_message(f"[Limpieza] {deleted} archivo(s) .mat eliminados.")
+
+        # 3. Archivos _temp.csv del estado parcial
+        state_folder = os.path.join(out_dir, ".state")
+        if os.path.exists(state_folder):
+            for f in glob.glob(os.path.join(state_folder, "*_temp.csv")):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+        self.log_message("[Limpieza] Limpieza completada.")
 
     # ------------------------------------------------------------------
     # Logging thread-safe con colores

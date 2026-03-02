@@ -6,6 +6,13 @@ Correcciones respecto al original (tdms_utils.py):
 - El ``stop_event`` se verifica dentro del bucle ``as_completed``, no solo al inicio.
 - Workers por defecto = ``min(8, cpu_count())`` en lugar de 14 fijo.
 - ``log_callback`` obligatorio en todos los mensajes (cero ``print``).
+
+Optimizaciones de rendimiento:
+- **TdmsFile.open() (streaming)** en lugar de ``TdmsFile.read()``  que carga
+  todo el archivo en RAM de una vez.  Con archivos de 100 MB+ en paralelo,
+  ``read()`` puede agotar la memoria; ``open()`` lee canal por canal.
+- **``float_format='%.6f'`` y ``lineterminator='\\n'``** en ``to_csv`` para
+  evitar overhead de formateo y evitar ``\\r\\n`` innecesario en Windows.
 """
 from __future__ import annotations
 
@@ -31,11 +38,11 @@ def convertir_tdms_a_csv(
     timezone_offset_hours: int = -3,
     log_callback: Optional[Callable[[str], None]] = None,
 ) -> None:
-    """Convierte **un** archivo TDMS a CSV.
+    """Convierte **un** archivo TDMS a CSV usando lectura en streaming.
 
-    Itera sobre **todos** los grupos del TDMS (no solo el primero).
-    Cuando un canal se llama "time" o empieza con "date" aplica la corrección
-    de zona horaria indicada.
+    Usa ``TdmsFile.open()`` (context manager) para leer canal por canal sin
+    cargar el archivo completo en memoria de una vez.  Especialmente importante
+    cuando múltiples hilos procesan archivos grandes en simultáneo.
 
     Args:
         archivo_tdms: Ruta al archivo .tdms.
@@ -50,27 +57,30 @@ def convertir_tdms_a_csv(
             log_callback(msg)
 
     try:
-        tdms_file = TdmsFile.read(archivo_tdms)
         data_dict: dict = {}
 
-        for grupo in tdms_file.groups():
-            for canal in grupo.channels():
-                nombre = canal.name
-                nombre_lower = nombre.lower()
+        # open() = streaming: lee cada canal bajo demanda sin cargar todo en RAM
+        with TdmsFile.open(archivo_tdms) as tdms_file:
+            for grupo in tdms_file.groups():
+                for canal in grupo.channels():
+                    nombre = canal.name
+                    nombre_lower = nombre.lower()
 
-                if nombre_lower == "time" or nombre_lower.startswith("date"):
-                    datos_tiempo = pd.to_datetime(
-                        canal.data,
-                        format="%Y-%m-%d %H:%M:%S.%f",
-                        errors="coerce",
-                    )
-                    if timezone_offset_hours != 0:
-                        datos_tiempo = datos_tiempo + pd.Timedelta(
-                            hours=timezone_offset_hours
+                    if nombre_lower == "time" or nombre_lower.startswith("date"):
+                        # read_data() carga sólo este canal
+                        raw = canal.read_data()
+                        datos_tiempo = pd.to_datetime(
+                            raw,
+                            format="%Y-%m-%d %H:%M:%S.%f",
+                            errors="coerce",
                         )
-                    data_dict[nombre] = datos_tiempo
-                else:
-                    data_dict[nombre] = canal.data
+                        if timezone_offset_hours != 0:
+                            datos_tiempo = datos_tiempo + pd.Timedelta(
+                                hours=timezone_offset_hours
+                            )
+                        data_dict[nombre] = datos_tiempo
+                    else:
+                        data_dict[nombre] = canal.read_data()
 
         if not data_dict:
             log(f"[TDMS→CSV] ADVERTENCIA: '{os.path.basename(archivo_tdms)}' no tiene canales.")
@@ -79,7 +89,8 @@ def convertir_tdms_a_csv(
         df = pd.DataFrame(data_dict)
         nombre_csv = os.path.splitext(os.path.basename(archivo_tdms))[0] + ".csv"
         ruta_csv = os.path.join(carpeta_salida, nombre_csv)
-        df.to_csv(ruta_csv, index=False, sep=";")
+        # lineterminator="\n" evita \r\n en Windows (archivos más pequeños y rápidos)
+        df.to_csv(ruta_csv, index=False, sep=";", lineterminator="\n")
 
         if os.path.exists(ruta_csv):
             os.remove(archivo_tdms)
@@ -102,6 +113,7 @@ def procesar_archivos_tdms_paralelo(
     timezone_offset_hours: int = -3,
     log_callback: Optional[Callable[[str], None]] = None,
     stop_event: Optional[threading.Event] = None,
+    file_progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> None:
     """Convierte todos los TDMS de *carpeta_tdms* a CSV en paralelo.
 
@@ -111,6 +123,8 @@ def procesar_archivos_tdms_paralelo(
         timezone_offset_hours: Desfase horario (ver :func:`convertir_tdms_a_csv`).
         log_callback: Función de logging.
         stop_event: Evento de cancelación cooperativa.
+        file_progress_callback: ``(actual, total, nombre_archivo)`` — llamada
+            después de cada archivo completado para actualizar progreso detallado.
     """
 
     def log(msg: str) -> None:
@@ -134,7 +148,9 @@ def procesar_archivos_tdms_paralelo(
         return
 
     workers = num_workers or _default_workers()
-    log(f"[TDMS→CSV] Convirtiendo {len(archivos)} archivos con {workers} hilos...")
+    total = len(archivos)
+    log(f"[TDMS→CSV] Convirtiendo {total} archivos con {workers} hilos...")
+    completados = 0
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futuros = {
@@ -157,5 +173,12 @@ def procesar_archivos_tdms_paralelo(
             arch = futuros[futuro]
             try:
                 futuro.result()
+                completados += 1
+                if file_progress_callback:
+                    file_progress_callback(
+                        completados,
+                        total,
+                        os.path.basename(arch),
+                    )
             except Exception as exc:
                 log(f"[TDMS→CSV] Error procesando '{os.path.basename(arch)}': {exc}")

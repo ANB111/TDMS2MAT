@@ -184,6 +184,7 @@ def main(
     prompt_func: Optional[PromptFunc] = None,
     stop_event: Optional[threading.Event] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    file_progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> bool:
     """Punto de entrada del pipeline de procesamiento.
 
@@ -197,6 +198,8 @@ def main(
         stop_event: Evento de cancelación cooperativa.
         progress_callback: ``(paso_actual, total_pasos, nombre_etapa)`` — llamada
             antes de iniciar cada etapa para actualizar la barra de progreso.
+        file_progress_callback: ``(actual, total, nombre)`` — llamada dentro
+            de cada etapa para mostrar progreso detallado archivo a archivo.
 
     Returns:
         ``True`` si el pipeline completó todas sus etapas, ``False`` si hubo
@@ -270,17 +273,17 @@ def main(
             (
                 "Conversión TDMS → CSV",
                 procesar_archivos_tdms_paralelo,
-                (temp_folder, None, tz_offset, log_callback, stop_event),
+                (temp_folder, None, tz_offset, log_callback, stop_event, file_progress_callback),
             ),
             (
                 "Ordenamiento y agrupación CSV por día",
                 ordenar_y_agrupado_por_dia,
-                (temp_folder, None, None, decimal, log_callback),
+                (temp_folder, None, None, decimal, log_callback, file_progress_callback),
             ),
             (
                 "Conversión CSV → MAT",
                 csv_to_mat,
-                (temp_folder, output_folder, unidad, procesar_incompleto, decimal, log_callback),
+                (temp_folder, output_folder, unidad, procesar_incompleto, decimal, log_callback, file_progress_callback),
             ),
         ]
 

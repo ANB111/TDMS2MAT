@@ -8,15 +8,25 @@ Correcciones críticas respecto al original (csv_utils.py):
 - ``COLUMN_ORDER`` se puede pasar como parámetro (``column_order``), con la
   lista hardcodeada como valor por defecto retrocompatible.
 - Workers por defecto = ``min(8, cpu_count())`` en lugar de 14 fijo.
+
+Optimizaciones de rendimiento:
+- **Sin lock contention**: cada hilo acumula en su propio dict local; la
+  fusión ocurre en el hilo principal tras completar todos los futuros.
+  Elimina la contención extrema de la versión anterior donde el lock se
+  adquiría en cada chunk por cada fecha.
+- **Chunk size 50 k** → reduce el número de iteraciones y overhead de groupby.
+- **parse_dates diferido**: pd.read_csv lee Time como string y se convierte
+  con pd.to_datetime sólo una vez por chunk (más rápido que parse_dates=).
+- **sort=False en groupby**: evita un sort innecesario (ya se ordena al final).
+- **Operaciones in-place**: evitan copias de DataFrame intermedias.
 """
 from __future__ import annotations
 
 import glob
 import os
 import shutil
-import threading
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Dict, List, Optional
 
 import pandas as pd
@@ -38,28 +48,40 @@ def _default_workers() -> int:
 
 def _procesar_csv_individual(
     file: str,
-    datos_por_dia: Dict,
-    datos_lock: threading.Lock,
     decimal: str,
-) -> None:
-    """Lee un CSV en chunks y acumula filas en *datos_por_dia* (thread-safe)."""
+) -> Dict:
+    """Lee un CSV en chunks y retorna datos agrupados por día — sin locks.
+
+    Cada hilo acumula en su propio dict local.  La fusión con el dict global
+    ocurre en el hilo principal tras completar todos los futuros, eliminando
+    completamente la contención de locks.
+
+    Mejoras respecto a la versión anterior:
+    - Sin threading.Lock → cero contención entre hilos.
+    - Chunk size 50 k → menos iteraciones y overhead de groupby.
+    - parse_dates diferido: pd.read_csv lee Time como str, se convierte una
+      sola vez por chunk con pd.to_datetime (más rápido que parse_dates=).
+    - sort=False en groupby → evita sort redundante (se ordena al final).
+    """
+    local: Dict = defaultdict(list)
     try:
         for chunk in pd.read_csv(
             file,
             delimiter=";",
             decimal=decimal,
-            parse_dates=["Time"],
-            chunksize=10_000,
+            chunksize=50_000,
         ):
-            chunk.sort_values(by="Time", inplace=True)
+            # Parsear fechas una vez por chunk (más rápido que parse_dates=)
+            chunk["Time"] = pd.to_datetime(chunk["Time"], errors="coerce")
+            chunk.dropna(subset=["Time"], inplace=True)
+            if chunk.empty:
+                continue
             chunk["Date"] = chunk["Time"].dt.date
-            with datos_lock:
-                for date, group in chunk.groupby("Date"):
-                    datos_por_dia[date].append(group)
+            for date, group in chunk.groupby("Date", sort=False):
+                local[date].append(group)
     except Exception as exc:
-        # No podemos usar log_callback aquí sin overhead extra de locking;
-        # el error quedará como excepción en el Future.
         raise RuntimeError(f"Error procesando '{os.path.basename(file)}': {exc}") from exc
+    return local
 
 
 def ordenar_y_agrupado_por_dia(
@@ -99,8 +121,8 @@ def ordenar_y_agrupado_por_dia(
     col_order = column_order or DEFAULT_COLUMN_ORDER
 
     # Estado LOCAL por invocación — no hay global state.
+    # Sin lock: cada hilo acumula en su propio dict, se fusiona aquí al final.
     datos_por_dia: Dict = defaultdict(list)
-    datos_lock = threading.Lock()
 
     workers = num_workers or _default_workers()
     log(f"[CSV] Leyendo {len(csv_files)} CSV con {workers} hilos...")
@@ -110,15 +132,16 @@ def ordenar_y_agrupado_por_dia(
             executor.submit(
                 _procesar_csv_individual,
                 f,
-                datos_por_dia,
-                datos_lock,
                 decimal,
             ): f
             for f in csv_files
         }
-        for fut in futuros:
+        for fut in as_completed(futuros):
             try:
-                fut.result()
+                local = fut.result()
+                # Fusión en el hilo principal — sin contención
+                for date, groups in local.items():
+                    datos_por_dia[date].extend(groups)
             except Exception as exc:
                 log(f"[CSV] ADVERTENCIA: {exc}")
 
@@ -128,9 +151,13 @@ def ordenar_y_agrupado_por_dia(
 
     log(f"[CSV] Agrupando en {len(datos_por_dia)} día(s)...")
 
+    total_dias = len(datos_por_dia)
+    dias_procesados = 0
     for date, groups in datos_por_dia.items():
-        daily_data = pd.concat(groups, ignore_index=True)
-        daily_data.sort_values(by="Time", inplace=True)
+        # Concatenar de una vez — más rápido que concat progresivo
+        daily_data = pd.concat(groups, ignore_index=True, copy=False)
+        # Ordenar una sola vez al final (mergesort = estable, rápido sobre nearly-sorted)
+        daily_data.sort_values(by="Time", inplace=True, kind="mergesort", ignore_index=True)
         daily_data.drop(columns=["Date"], inplace=True)
 
         # Reordenar columnas
@@ -145,7 +172,12 @@ def ordenar_y_agrupado_por_dia(
 
         date_str = f"{str(date.year)[-2:]}.{date.month}.{date.day}"
         output_file = os.path.join(input_folder, f"{date_str}.csv")
-        daily_data.to_csv(output_file, sep=";", decimal=decimal, index=False)
+        daily_data.to_csv(output_file, sep=";", decimal=decimal, index=False, lineterminator="\n")
+
+        # Progreso por día
+        dias_procesados += 1
+        if file_progress_callback:
+            file_progress_callback(dias_procesados, total_dias, date_str)
 
         # Crear/eliminar _temp.csv según completitud del día.
         # Un día se considera completo si la última muestra cae después de las
