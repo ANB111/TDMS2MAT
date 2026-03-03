@@ -110,7 +110,7 @@ def decompress_zip_files(
         extract_dirs[zip_file] = os.path.join(output_folder, f"{stem}_xtmp")
 
     cpu = os.cpu_count() or 2
-    workers = min(4, cpu, len(valid_files))
+    workers = min(cpu, len(valid_files))
     log(f"[Descompresión] Extrayendo {len(valid_files)} ZIP(s) con {workers} hilos paralelos...")
 
     with ThreadPoolExecutor(max_workers=workers) as executor:

@@ -51,9 +51,16 @@ def count_startups_shutdowns(
         Tupla ``(arranques, paradas, estado_inicial, estado_final, speed_data)``.
     """
     try:
-        speed_data: np.ndarray = mat_data["data"][:, SPEED_CHANNEL_IDX]
+        raw = np.atleast_2d(mat_data["data"])
+        if raw.ndim < 2 or raw.shape[0] == 0 or raw.shape[1] <= SPEED_CHANNEL_IDX:
+            return 0, 0, "Desconocido", "Desconocido", np.array([])
+        speed_data: np.ndarray = raw[:, SPEED_CHANNEL_IDX]
     except (IndexError, KeyError):
         return 0, 0, "Desconocido", "Desconocido", np.array([])
+
+    if speed_data.size < 2:
+        estado = "Encendida" if speed_data.size == 1 and speed_data[0] > 0 else "Apagada"
+        return 0, 0, estado, estado, speed_data
 
     startups = shutdowns = 0
     for i in range(1, len(speed_data)):
@@ -184,6 +191,7 @@ def process_mat_folder(
         "Fecha", "Arranques", "Paradas", "Total",
         "Horas Encendida", "Movimientos",
         "Estado Inicial", "Estado Final", "Archivo",
+        "Total Acumulado", "Movimientos Acumulados",
     ]
 
     # Cargar Excel existente o crear vacío
@@ -192,10 +200,13 @@ def process_mat_folder(
         for col in expected_columns:
             if col not in df_excel.columns:
                 df_excel[col] = None
-        df_excel = df_excel[expected_columns]
+        # Leer solo las columnas base (sin acumuladas) para no contaminar el recálculo
+        base_columns = [c for c in expected_columns if c not in ("Total Acumulado", "Movimientos Acumulados")]
+        df_excel = df_excel[base_columns]
         processed_files: set = set(df_excel["Archivo"].dropna())
     else:
-        df_excel = pd.DataFrame(columns=expected_columns)
+        base_columns = [c for c in expected_columns if c not in ("Total Acumulado", "Movimientos Acumulados")]
+        df_excel = pd.DataFrame(columns=base_columns)
         processed_files = set()
 
     # Listar y ordenar archivos .mat
@@ -214,15 +225,41 @@ def process_mat_folder(
             mat_data = loadmat(mat_path)
             date_str = mat_file.split("-")[0]
 
+            # Validar que el archivo tenga datos suficientes para análisis
+            raw_data = np.atleast_2d(mat_data.get("data", np.empty((0, 0))))
+            n_samples = raw_data.shape[0]
+            if n_samples < 2:
+                log(f"ADVERTENCIA: '{mat_file}' tiene solo {n_samples} muestra(s); se omite el análisis.")
+                new_row = {
+                    "Fecha": date_str,
+                    "Arranques": 0,
+                    "Paradas": 0,
+                    "Total": 0,
+                    "Horas Encendida": 0.0,
+                    "Movimientos": None,
+                    "Estado Inicial": "Desconocido",
+                    "Estado Final": "Desconocido",
+                    "Archivo": mat_file,
+                }
+                df_excel = pd.concat(
+                    [df_excel, pd.DataFrame([new_row])], ignore_index=True
+                )
+                processed_files.add(mat_file)
+                continue
+
             startups, shutdowns, est_ini, est_fin, speed_data = count_startups_shutdowns(
                 mat_data
             )
             total = startups + shutdowns
 
             try:
-                movimientos = calculate_movements_from_counter(
-                    mat_data["data"][:, MOVEMENT_COUNTER_IDX]
-                )
+                raw = np.atleast_2d(mat_data["data"])
+                if raw.ndim >= 2 and raw.shape[1] > MOVEMENT_COUNTER_IDX:
+                    movimientos = calculate_movements_from_counter(
+                        raw[:, MOVEMENT_COUNTER_IDX]
+                    )
+                else:
+                    movimientos = None
             except Exception:
                 movimientos = None
 
@@ -304,6 +341,15 @@ def process_mat_folder(
             lambda dt: format_fecha_string(dt.to_pydatetime()) if pd.notna(dt) else ""
         )
         df_excel = df_excel.drop(columns=["__fecha_dt"]).reset_index(drop=True)
+
+    # Calcular columnas acumuladas (sobre el DataFrame ya ordenado)
+    df_excel["Total Acumulado"] = pd.to_numeric(
+        df_excel["Total"], errors="coerce"
+    ).fillna(0).cumsum().astype(int)
+
+    df_excel["Movimientos Acumulados"] = pd.to_numeric(
+        df_excel["Movimientos"], errors="coerce"
+    ).fillna(0).cumsum().astype(int)
 
     df_excel.to_excel(excel_path, index=False)
     log(f"Resultados guardados en: {excel_path}")

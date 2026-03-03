@@ -229,11 +229,14 @@ def main(
     unidad = cfg.unidad
     realizar_conteo = cfg.realizar_conteo
     descomprimir = cfg.descomprimir
+    procesar_desde_tdms = cfg.procesar_desde_tdms
     rainflow = cfg.rainflow
     selected_files = cfg.selected_files
     concatenar = cfg.concatenar_excels
     tz_offset = cfg.timezone_offset_hours
     decimal = cfg.csv_decimal_separator
+    # 0 = automático (todos los núcleos); >0 = valor explícito del usuario
+    num_workers: Optional[int] = cfg.num_workers if cfg.num_workers > 0 else None
 
     # La carpeta de estado es persistente (sobrevive reinicios).
     # Default: output_folder/.state  (oculta junto a los MAT)
@@ -252,10 +255,38 @@ def main(
         log("ADVERTENCIA: No se seleccionaron archivos para procesar.")
         return False
 
+    # Validar combinación de modos
+    if descomprimir and procesar_desde_tdms:
+        log("ADVERTENCIA: 'Descomprimir' y 'Procesar desde TDMS' no pueden estar activos a la vez. Se usará 'Descomprimir'.")
+        procesar_desde_tdms = False
+
     if selected_files:
         log(f"Se procesarán {len(selected_files)} archivo(s).")
+    elif descomprimir or procesar_desde_tdms:
+        log("No se seleccionaron archivos; solo se ejecutarán etapas independientes.")
     else:
         log("No se seleccionaron archivos; solo se ejecutarán etapas independientes.")
+
+    # ------------------------------------------------------------------
+    # Limpiar temp al inicio de cada run para evitar acumulación de
+    # archivos de runs anteriores interrumpidos o con errores.
+    # Los _temp.csv de días incompletos se restauran justo después desde
+    # state_folder, por lo que limpiar aquí es seguro.
+    # ------------------------------------------------------------------
+    needs_temp = descomprimir or procesar_desde_tdms
+    if needs_temp and os.path.exists(temp_folder):
+        residuales = [
+            f for f in os.listdir(temp_folder)
+            if not f.endswith("_temp.csv")  # conservar días incompletos pendientes
+        ]
+        if residuales:
+            log(f"[Temp] Limpiando {len(residuales)} archivo(s) residual(es) de runs anteriores...")
+            for nombre in residuales:
+                ruta = os.path.join(temp_folder, nombre)
+                try:
+                    os.remove(ruta)
+                except OSError as exc:
+                    log(f"[Temp] No se pudo eliminar '{nombre}': {exc}")
 
     # ------------------------------------------------------------------
     # Fase A: ZIP → TDMS → CSV (agrupado por día) → MAT
@@ -273,17 +304,38 @@ def main(
             (
                 "Conversión TDMS → CSV",
                 procesar_archivos_tdms_paralelo,
-                (temp_folder, None, tz_offset, log_callback, stop_event, file_progress_callback),
+                (temp_folder, num_workers, tz_offset, log_callback, stop_event, file_progress_callback),
             ),
             (
                 "Ordenamiento y agrupación CSV por día",
                 ordenar_y_agrupado_por_dia,
-                (temp_folder, None, None, decimal, log_callback, file_progress_callback),
+                (temp_folder, num_workers, None, decimal, log_callback, file_progress_callback, stop_event),
             ),
             (
                 "Conversión CSV → MAT",
                 csv_to_mat,
-                (temp_folder, output_folder, unidad, procesar_incompleto, decimal, log_callback, file_progress_callback),
+                (temp_folder, output_folder, unidad, procesar_incompleto, decimal, log_callback, file_progress_callback, num_workers, stop_event),
+            ),
+        ]
+
+    elif procesar_desde_tdms:
+        # input_folder contiene TDMSs directamente (ya descomprimidos)
+        log(f"[Modo] Procesando TDMS directamente desde '{input_folder}'.")
+        phase_a_stages += [
+            (
+                "Conversión TDMS → CSV",
+                procesar_archivos_tdms_paralelo,
+                (input_folder, num_workers, tz_offset, log_callback, stop_event, file_progress_callback),
+            ),
+            (
+                "Ordenamiento y agrupación CSV por día",
+                ordenar_y_agrupado_por_dia,
+                (temp_folder, num_workers, None, decimal, log_callback, file_progress_callback, stop_event),
+            ),
+            (
+                "Conversión CSV → MAT",
+                csv_to_mat,
+                (temp_folder, output_folder, unidad, procesar_incompleto, decimal, log_callback, file_progress_callback, num_workers, stop_event),
             ),
         ]
 
@@ -349,7 +401,7 @@ def main(
         # Antes de procesar nuevos datos: restaurar días incompletos del
         # run anterior al temp de procesamiento para que csv_processor los
         # incorpore en la agrupación por día.
-        if descomprimir:
+        if needs_temp:
             restore_incomplete_days(state_folder, temp_folder, log)
 
         # --- Fase A ---
@@ -363,7 +415,7 @@ def main(
 
         # Actualizar estado de días incompletos (siempre, aunque haya error,
         # para no perder datos parciales ya procesados).
-        if descomprimir:
+        if needs_temp:
             update_incomplete_days(temp_folder, state_folder, log)
 
         # --- Fase B (sólo si la Fase A fue exitosa) ---
@@ -379,7 +431,7 @@ def main(
     except ProcessingError as exc:
         log(str(exc))
         # Intentar guardar estado parcial antes de salir
-        if descomprimir:
+        if needs_temp:
             try:
                 update_incomplete_days(temp_folder, state_folder, log)
             except Exception:

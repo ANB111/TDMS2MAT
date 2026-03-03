@@ -10,20 +10,23 @@ Correcciones respecto al original (mat_utils.py):
   mueve a la carpeta de estado persistente para el próximo run.
 
 Optimizaciones de rendimiento:
-- **Paralelización**: conversiones CSV→MAT en paralelo con ThreadPoolExecutor.
-  scipy.io.savemat y pd.read_csv liberan el GIL en los tramos de I/O, lo que
-  permite concurrencia real incluso con hilos Python.
-- Workers = min(4, cpu_count(), n_archivos) para no saturar disco en HDD.
+- **ProcessPoolExecutor**: cada conversión CSV→MAT corre en un proceso
+  separado con su propio GIL, logrando paralelismo CPU real.
+  pd.read_csv, pd.to_datetime y savemat son CPU-bound; con hilos el GIL
+  los serializa en la práctica.
 """
 from __future__ import annotations
 
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from concurrent.futures import ProcessPoolExecutor
 from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from scipy.io import savemat  # type: ignore[import]
+
+from tdms2mat.utils.threading_utils import cancelable_pool_map
 
 
 def _convert_one(
@@ -85,6 +88,8 @@ def csv_to_mat(
     decimal: str = ".",
     log_callback: Optional[Callable[[str], None]] = None,
     file_progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    num_workers: Optional[int] = None,
+    stop_event: Optional[threading.Event] = None,
 ) -> None:
     """Convierte todos los CSV diarios de *input_folder* a archivos MAT en paralelo.
 
@@ -126,22 +131,27 @@ def csv_to_mat(
         return
 
     cpu = os.cpu_count() or 2
-    workers = min(4, cpu, len(csv_files))
-    log(f"[CSV→MAT] Convirtiendo {len(csv_files)} archivo(s) con {workers} hilos...")
+    workers = num_workers if num_workers else min(cpu, len(csv_files))
+    log(f"[CSV→MAT] Convirtiendo {len(csv_files)} archivo(s) con {workers} procesos...")
     completados = 0
     total = len(csv_files)
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with ProcessPoolExecutor(max_workers=workers) as executor:
         futuros = {
             executor.submit(_convert_one, f, input_folder, output_folder, unidad, decimal): f
             for f in csv_files
         }
-        for fut in as_completed(futuros):
-            csv_f, err = fut.result()
+
+        def _on_result(fut, csv_f):  # type: ignore[misc]
+            nonlocal completados
+            csv_f_res, err = fut.result()
             completados += 1
             if err:
-                log(f"[CSV→MAT] '{csv_f}': {err}")
+                log(f"[CSV→MAT] '{csv_f_res}': {err}")
             else:
-                log(f"[CSV→MAT] {csv_f} → convertido.")
+                log(f"[CSV→MAT] {csv_f_res} → convertido.")
             if file_progress_callback:
-                file_progress_callback(completados, total, csv_f)
+                file_progress_callback(completados, total, csv_f_res)
+
+        if not cancelable_pool_map(executor, futuros, stop_event, _on_result):
+            log("[CSV→MAT] Cancelado por el usuario.")

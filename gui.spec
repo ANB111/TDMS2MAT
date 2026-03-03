@@ -2,11 +2,27 @@
 
 
 a = Analysis(
-    ['gui.py'],
-    pathex=[],
+    ['tdms2mat/__main__.py'],
+    pathex=['.'],
     binaries=[],
-    datas=[('procesar_matlab.m', '.'), ('config.json', '.')],
-    hiddenimports=[],
+    datas=[
+        ('procesar_matlab.m', '.'),
+        ('config.json', '.'),
+        ('icon.ico', '.'),
+        ('icon.png', '.'),
+        ('tdms2mat/gui', 'tdms2mat/gui'),
+    ],
+    hiddenimports=[
+        'tdms2mat',
+        'tdms2mat.gui.app',
+        'tdms2mat.pipeline.orchestrator',
+        'tdms2mat.config.schema',
+        'tdms2mat.config.config_utils',
+        'PIL',
+        'PIL.Image',
+        'PIL.ImageTk',
+        'ttkbootstrap',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -22,7 +38,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='gui',
+    name='TDMS2MAT',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -35,4 +51,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='icon.ico',
 )

@@ -7,6 +7,11 @@ from __future__ import annotations
 
 def main() -> None:
     """Lanza la GUI de TDMS2MAT."""
+    import multiprocessing
+    # Necesario en Windows para que ProcessPoolExecutor funcione correctamente
+    # tanto en desarrollo como en el ejecutable compilado con PyInstaller.
+    multiprocessing.freeze_support()
+
     import ttkbootstrap as ttk  # type: ignore[import]
     from tdms2mat.gui.app import App
 

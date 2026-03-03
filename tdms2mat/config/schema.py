@@ -121,6 +121,14 @@ class AppConfig(BaseModel):
         default=True,
         description="Habilita el pipeline ZIP→TDMS→CSV→MAT.",
     )
+    procesar_desde_tdms: bool = Field(
+        default=False,
+        description=(
+            "Procesa directamente desde archivos TDMS en input_folder, "
+            "saltándose la descompresión de ZIPs. "
+            "Incompatible con descomprimir=True."
+        ),
+    )
     procesar_incompleto: bool = Field(
         default=False,
         description="Incluye archivos _temp.csv (días incompletos) en la conversión.",
@@ -158,6 +166,19 @@ class AppConfig(BaseModel):
         description=(
             "Separador decimal usado al leer/escribir CSV intermedios. "
             "Usar '.' para configuraciones en inglés (NI LabVIEW)."
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # Paralelismo
+    # ------------------------------------------------------------------
+    num_workers: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Número de hilos de trabajo para las etapas paralelas del pipeline "
+            "(descompresión, TDMS→CSV, CSV agrupación, CSV→MAT). "
+            "0 = automático: usa todos los núcleos de la CPU disponibles."
         ),
     )
 

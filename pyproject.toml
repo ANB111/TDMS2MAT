@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "tdms2mat"
@@ -15,7 +15,7 @@ dependencies = [
     "nptdms>=1.4,<2.0",
     "pandas>=1.5,<3.0",
     "scipy>=1.9,<2.0",
-    "numpy>=1.23,<2.0",
+    "numpy>=1.23,<3.0",
     "ttkbootstrap>=1.10,<2.0",
     "openpyxl>=3.1,<4.0",
     "pydantic>=2.0,<3.0",

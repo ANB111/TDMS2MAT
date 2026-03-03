@@ -44,7 +44,10 @@ from tdms2mat.pipeline.orchestrator import main as run_pipeline
 # ---------------------------------------------------------------------------
 CONFIG_FILE = "config.json"
 BASE_DIR: Path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-ICON_PATH: Path = BASE_DIR / "icon.png"
+# Se busca primero icon.ico (óptimo en Windows); si no existe se cae a icon.png
+_ico = BASE_DIR / "icon.ico"
+_png = BASE_DIR / "icon.png"
+ICON_PATH: Path = _ico if _ico.exists() else _png
 
 
 class App:
@@ -78,8 +81,10 @@ class App:
             "ruta_guardado_graficos": StringVar(),
             "FS": IntVar(value=10),
             "descomprimir": BooleanVar(value=True),
+            "procesar_desde_tdms": BooleanVar(value=False),
             "n_channels": IntVar(value=16),
             "unidad": StringVar(value="05"),
+            "num_workers": IntVar(value=0),
             "procesar_incompleto": BooleanVar(value=False),
             "rainflow": BooleanVar(value=False),
             "realizar_conteo": BooleanVar(value=False),
@@ -216,10 +221,11 @@ class App:
     def _build_params_section(self, parent: ttk.Frame, row: int) -> None:
         pf = ttk.Labelframe(parent, text="Parámetros de Procesamiento", padding=10)
         pf.grid(row=row, column=0, columnspan=2, sticky="ew", pady=5)
-        pf.columnconfigure((0, 1, 2), weight=1)
+        pf.columnconfigure((0, 1, 2, 3), weight=1)
         self._create_labeled_entry(pf, "FS (Hz):", "FS", 0, 0)
         self._create_labeled_entry(pf, "Canales:", "n_channels", 0, 1)
         self._create_labeled_entry(pf, "Unidad:", "unidad", 0, 2)
+        self._create_labeled_entry(pf, "Workers (0=auto):", "num_workers", 0, 3)
 
     def _build_process_section(self, parent: ttk.Frame, row: int) -> None:
         pf = ttk.Labelframe(parent, text="Procesos", padding=10)
@@ -234,13 +240,21 @@ class App:
             command=self.toggle_processing_options,
         ).grid(row=0, column=0, sticky="w", pady=2)
 
+        ttk.Checkbutton(
+            pf,
+            text="Procesar desde TDMS (sin ZIP)",
+            variable=self.config["procesar_desde_tdms"],
+            bootstyle="round-toggle",
+            command=self.toggle_processing_options,
+        ).grid(row=0, column=1, sticky="w", pady=2)
+
         self.incompletos_cb = ttk.Checkbutton(
             pf,
             text="Procesar días incompletos",
             variable=self.config["procesar_incompleto"],
             bootstyle="round-toggle",
         )
-        self.incompletos_cb.grid(row=0, column=1, sticky="w", pady=2)
+        self.incompletos_cb.grid(row=1, column=0, sticky="w", pady=2)
 
         self.rainflow_cb = ttk.Checkbutton(
             pf,
@@ -248,14 +262,14 @@ class App:
             variable=self.config["rainflow"],
             bootstyle="round-toggle",
         )
-        self.rainflow_cb.grid(row=1, column=0, sticky="w", pady=2)
+        self.rainflow_cb.grid(row=2, column=0, sticky="w", pady=2)
 
         ttk.Checkbutton(
             pf,
             text="Conteo de Arranques/Paradas",
             variable=self.config["realizar_conteo"],
             bootstyle="round-toggle",
-        ).grid(row=1, column=1, sticky="w", pady=2)
+        ).grid(row=2, column=1, sticky="w", pady=2)
 
         self.graficos_matlab_cb = ttk.Checkbutton(
             pf,
@@ -263,14 +277,14 @@ class App:
             variable=self.config["graficos_matlab"],
             bootstyle="round-toggle",
         )
-        self.graficos_matlab_cb.grid(row=2, column=0, sticky="w", pady=2)
+        self.graficos_matlab_cb.grid(row=3, column=0, sticky="w", pady=2)
 
         ttk.Checkbutton(
             pf,
             text="Concatenar Excels",
             variable=self.config["concatenar_excels"],
             bootstyle="round-toggle",
-        ).grid(row=2, column=1, sticky="w", pady=2)
+        ).grid(row=3, column=1, sticky="w", pady=2)
 
     def _build_log_section(self, parent: ttk.Frame, row: int) -> None:
         lf = ttk.Labelframe(parent, text="Registro de Actividad", padding=10)
@@ -681,7 +695,15 @@ class App:
             "¿Desea cancelar el procesamiento?\n"
             "Se eliminarán todos los archivos generados durante esta sesión.",
         ):
+            # Señalizar cancelación al pipeline de inmediato
             self.stop_event.set()
+            # Deshabilitar el botón Cancelar y mostrar estado "Cancelando..."
+            # para que el usuario sepa que la orden fue recibida, aunque el
+            # proceso hijo actual termine de procesar su archivo antes de parar.
+            self._btn_cancel.config(state="disabled")
+            self._status_text.set("● Cancelando...")
+            self._status_indicator.config(bootstyle="warning")
+            self._stage_text.set("Esperando que el archivo en curso termine...")
 
     def _cleanup_cancelled_run(self, cfg: dict) -> None:
         """Elimina archivos generados desde que se inició el procesamiento cancelado."""
@@ -843,8 +865,23 @@ class App:
     # ------------------------------------------------------------------
 
     def toggle_processing_options(self) -> None:
-        state = "normal" if self.config["descomprimir"].get() else "disabled"
-        if state == "disabled":
+        descomp = self.config["descomprimir"].get()
+        desde_tdms = self.config["procesar_desde_tdms"].get()
+
+        # Mutuamente excluyentes: si se activa uno, apaga el otro
+        if descomp and desde_tdms:
+            # El que se acaba de activar es el que llamó al comando;
+            # desactivamos el otro en función de cuál tiene foco (el último en llamar)
+            # Detectamos cuál fue: comparamos con el estado anterior usando la regla
+            # "el toggle fue en descomprimir → apaga desde_tdms y viceversa"
+            # Como ambos llaman a este método, simplemente priorizamos descomprimir.
+            self.config["procesar_desde_tdms"].set(False)
+            desde_tdms = False
+
+        # Habilitar/deshabilitar opciones dependientes del pipeline de conversión
+        pipeline_activo = descomp or desde_tdms
+        state = "normal" if pipeline_activo else "disabled"
+        if not pipeline_activo:
             self.config["rainflow"].set(False)
             self.config["graficos_matlab"].set(False)
             self.config["procesar_incompleto"].set(False)
@@ -903,18 +940,41 @@ class App:
     # ------------------------------------------------------------------
 
     def _set_window_icon(self) -> None:
+        """Aplica el ícono a la ventana: barra de título, barra de tareas y Alt+Tab.
+
+        Estrategia:
+        - En Windows, ``iconbitmap`` con un .ico es el método nativo y actualiza
+          tanto la barra de título como la barra de tareas de Windows.
+        - ``iconphoto`` con un PhotoImage de Pillow actualiza el ícono interno de
+          Tk (necesario para que ttkbootstrap lo muestre correctamente).
+        - Ambas llamadas se combinan para máxima compatibilidad.
+        """
         if not ICON_PATH.exists():
             return
-        try:
-            self.root.iconbitmap(default=str(ICON_PATH))
-        except Exception:
-            pass
-        if ICON_PATH.suffix.lower() in {".png", ".gif"}:
+
+        # --- .ico: método nativo Windows (barra de título + taskbar) ---
+        if ICON_PATH.suffix.lower() == ".ico":
             try:
-                self._icon_image = tk.PhotoImage(file=str(ICON_PATH))
-                self.root.iconphoto(False, self._icon_image)
+                self.root.iconbitmap(default=str(ICON_PATH))
             except Exception:
                 pass
+
+        # --- PhotoImage con Pillow: ícono interno de Tk (Alt+Tab, ttkbootstrap) ---
+        try:
+            from PIL import Image, ImageTk  # type: ignore[import]
+            pil_img = Image.open(str(ICON_PATH)).convert("RGBA")
+            # Tamaños estándar: 32 px para la barra de título, 16 px para la taskbar
+            self._icon_image_32 = ImageTk.PhotoImage(pil_img.resize((32, 32), Image.LANCZOS))
+            self._icon_image_16 = ImageTk.PhotoImage(pil_img.resize((16, 16), Image.LANCZOS))
+            self.root.iconphoto(True, self._icon_image_32, self._icon_image_16)
+        except Exception:
+            # Fallback a tk.PhotoImage si Pillow no está disponible o falla
+            if ICON_PATH.suffix.lower() in {".png", ".gif"}:
+                try:
+                    self._icon_image = tk.PhotoImage(file=str(ICON_PATH))
+                    self.root.iconphoto(True, self._icon_image)
+                except Exception:
+                    pass
 
 
 # ---------------------------------------------------------------------------

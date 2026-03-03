@@ -4,10 +4,16 @@ Correcciones respecto al original (tdms_utils.py):
 - La zona horaria (+/-3 h) ya no está hardcodeada: se lee de ``AppConfig.timezone_offset_hours``.
 - Soporte para archivos TDMS con múltiples grupos (se itera sobre todos).
 - El ``stop_event`` se verifica dentro del bucle ``as_completed``, no solo al inicio.
-- Workers por defecto = ``min(8, cpu_count())`` en lugar de 14 fijo.
+- Workers por defecto = ``cpu_count()`` para usar todos los núcleos disponibles.
 - ``log_callback`` obligatorio en todos los mensajes (cero ``print``).
 
 Optimizaciones de rendimiento:
+- **ProcessPoolExecutor** para conversión TDMS→CSV: cada proceso tiene su
+  propio GIL.  La deserialización TDMS y la conversión de timestamps con
+  pandas son CPU-bound; con ThreadPoolExecutor el GIL los serializa.
+- El ``stop_event`` y ``log_callback`` (no serializables por pickle) se
+  gestionan únicamente en el proceso principal; cada proceso worker recibe
+  solo argumentos simples (strings, ints).
 - **TdmsFile.open() (streaming)** en lugar de ``TdmsFile.read()``  que carga
   todo el archivo en RAM de una vez.  Con archivos de 100 MB+ en paralelo,
   ``read()`` puede agotar la memoria; ``open()`` lee canal por canal.
@@ -18,18 +24,18 @@ from __future__ import annotations
 
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from typing import Callable, Optional
 
 import pandas as pd
 from nptdms import TdmsFile  # type: ignore[import]
 
-from tdms2mat.utils.threading_utils import check_stop_event
+from tdms2mat.utils.threading_utils import check_stop_event, cancelable_pool_map
 
 
 def _default_workers() -> int:
     cpu = os.cpu_count() or 4
-    return min(8, cpu)
+    return cpu
 
 
 def convertir_tdms_a_csv(
@@ -149,36 +155,34 @@ def procesar_archivos_tdms_paralelo(
 
     workers = num_workers or _default_workers()
     total = len(archivos)
-    log(f"[TDMS→CSV] Convirtiendo {total} archivos con {workers} hilos...")
+    log(f"[TDMS→CSV] Convirtiendo {total} archivos con {workers} procesos...")
     completados = 0
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with ProcessPoolExecutor(max_workers=workers) as executor:
         futuros = {
             executor.submit(
                 convertir_tdms_a_csv,
                 arch,
                 carpeta_tdms,
                 timezone_offset_hours,
-                log_callback,
+                None,  # log_callback no es serializable: se omite en el worker
             ): arch
             for arch in archivos
         }
 
-        for futuro in as_completed(futuros):
-            # Verificar cancelación dentro del bucle
-            if stop_event and stop_event.is_set():
-                log("[TDMS→CSV] Proceso cancelado por el usuario.")
-                break
-
-            arch = futuros[futuro]
+        def _on_result(futuro, arch):
+            nonlocal completados
             try:
                 futuro.result()
                 completados += 1
                 if file_progress_callback:
-                    file_progress_callback(
-                        completados,
-                        total,
-                        os.path.basename(arch),
-                    )
+                    file_progress_callback(completados, total, os.path.basename(arch))
             except Exception as exc:
                 log(f"[TDMS→CSV] Error procesando '{os.path.basename(arch)}': {exc}")
+
+        cancelled = not cancelable_pool_map(
+            executor, futuros, stop_event, _on_result,
+            on_cancel_msg="[TDMS→CSV] Proceso cancelado por el usuario.",
+        )
+        if cancelled:
+            log("[TDMS→CSV] Proceso cancelado por el usuario.")
