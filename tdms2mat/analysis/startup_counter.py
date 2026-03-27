@@ -27,6 +27,21 @@ SPEED_CHANNEL_IDX: int = 13
 #: Canal de contador de movimientos (por ej. posición de paletas).
 MOVEMENT_COUNTER_IDX: int = 7
 
+# Umbrales de histéresis y anti-rebote para el conteo de transiciones.
+# La señal de velocidad está normalizada en 0-100, pero la referencia física
+# es 0-72 rpm. Se considera parada por debajo de 1 rpm.
+SPEED_MAX_RPM: float = 72.0
+STOP_RPM_THRESHOLD: float = 1.0
+
+# Encendida cuando velocidad >= STARTUP_ON_THRESHOLD.
+# Apagada cuando velocidad <= SHUTDOWN_OFF_THRESHOLD.
+STARTUP_ON_THRESHOLD: float = (STOP_RPM_THRESHOLD / SPEED_MAX_RPM) * 100.0
+SHUTDOWN_OFF_THRESHOLD: float = STARTUP_ON_THRESHOLD
+
+# Cantidad mínima de muestras consecutivas para confirmar transición.
+# Si la transición queda pendiente al final de la serie, se confirma una vez.
+STATE_CONFIRM_SAMPLES: int = 2
+
 
 # ---------------------------------------------------------------------------
 # Funciones de análisis (puras — sin I/O ni logging)
@@ -59,20 +74,83 @@ def count_startups_shutdowns(
         return 0, 0, "Desconocido", "Desconocido", np.array([])
 
     if speed_data.size < 2:
-        estado = "Encendida" if speed_data.size == 1 and speed_data[0] > 0 else "Apagada"
+        estado = (
+            "Encendida"
+            if speed_data.size == 1 and speed_data[0] >= STARTUP_ON_THRESHOLD
+            else "Apagada"
+        )
         return 0, 0, estado, estado, speed_data
 
-    startups = shutdowns = 0
-    for i in range(1, len(speed_data)):
-        prev, curr = speed_data[i - 1], speed_data[i]
-        if prev == 0 and curr > 0:
-            startups += 1
-        elif prev > 0 and curr == 0:
-            shutdowns += 1
-
-    estado_inicial = "Encendida" if speed_data[0] > 0 else "Apagada"
-    estado_final = "Encendida" if speed_data[-1] > 0 else "Apagada"
+    startups, shutdowns, estado_inicial, estado_final = _count_with_hysteresis(
+        speed_data,
+        on_threshold=STARTUP_ON_THRESHOLD,
+        off_threshold=SHUTDOWN_OFF_THRESHOLD,
+        confirm_samples=STATE_CONFIRM_SAMPLES,
+    )
     return startups, shutdowns, estado_inicial, estado_final, speed_data
+
+
+def _count_with_hysteresis(
+    speed_data: np.ndarray,
+    on_threshold: float,
+    off_threshold: float,
+    confirm_samples: int,
+) -> Tuple[int, int, str, str]:
+    """Cuenta transiciones con histéresis y confirmación de estado.
+
+    Esta lógica evita falsos conteos por ruido/rebote cerca de cero.
+    """
+    arr = np.asarray(speed_data, dtype=float).flatten()
+    if arr.size == 0:
+        return 0, 0, "Desconocido", "Desconocido"
+
+    # Estado inicial con histéresis: por defecto, un valor intermedio se toma
+    # como apagada para minimizar falsos arranques.
+    is_on = bool(arr[0] >= on_threshold)
+    estado_inicial = "Encendida" if is_on else "Apagada"
+
+    startups = 0
+    shutdowns = 0
+    required = max(1, int(confirm_samples))
+    pending_state: Optional[bool] = None
+    pending_count = 0
+
+    for value in arr[1:]:
+        if is_on:
+            target_on = not (value <= off_threshold)
+        else:
+            target_on = bool(value >= on_threshold)
+
+        if target_on == is_on:
+            pending_state = None
+            pending_count = 0
+            continue
+
+        if pending_state is None or pending_state != target_on:
+            pending_state = target_on
+            pending_count = 1
+        else:
+            pending_count += 1
+
+        if pending_count >= required:
+            if pending_state:
+                startups += 1
+            else:
+                shutdowns += 1
+            is_on = pending_state
+            pending_state = None
+            pending_count = 0
+
+    # Si la serie termina durante una transición pendiente, se confirma una vez.
+    if pending_state is not None and pending_state != is_on and pending_count > 0:
+        if pending_state:
+            startups += 1
+        else:
+            shutdowns += 1
+        is_on = pending_state
+
+    estado_final = "Encendida" if is_on else "Apagada"
+    return startups, shutdowns, estado_inicial, estado_final
 
 
 def calculate_runtime_hours(
@@ -92,7 +170,7 @@ def calculate_runtime_hours(
     if speed_array.size == 0:
         return 0.0, 0.0
 
-    on_mask = speed_array > 0
+    on_mask = speed_array >= STARTUP_ON_THRESHOLD
     time_array: Optional[np.ndarray] = None
 
     if isinstance(time_epoch, np.ndarray) and time_epoch.size:
@@ -270,7 +348,7 @@ def process_mat_folder(
             if (
                 horas_disp >= 23.9
                 and speed_data.size > 0
-                and speed_data[0] > 0
+                and speed_data[0] >= STARTUP_ON_THRESHOLD
                 and shutdowns == 0
             ):
                 log(

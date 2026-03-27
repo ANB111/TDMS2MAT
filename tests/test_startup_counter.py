@@ -45,13 +45,37 @@ class TestCountStartupsShutdowns:
         )
 
         n_cols = max(SPEED_CHANNEL_IDX + 1, 16)
-        data_matrix = np.zeros((12, n_cols))
-        speed = np.array([0, 0, 120, 120, 0, 0, 120, 120, 0, 0, 120, 0], dtype=float)
+        data_matrix = np.zeros((14, n_cols))
+        # Tres ciclos completos con estados estables (sin casos borde de 1 muestra).
+        speed = np.array(
+            [0, 0, 120, 120, 0, 0, 120, 120, 0, 0, 120, 120, 0, 0],
+            dtype=float,
+        )
         data_matrix[:, SPEED_CHANNEL_IDX] = speed
         mat = {"data": data_matrix}
         starts, stops, _, _, _ = count_startups_shutdowns(mat)
         assert starts == 3
         assert stops == 3
+
+    def test_rebound_noise_does_not_create_extra_cycle(self) -> None:
+        """Un rebote corto no debe sumar una parada+arranque extra."""
+        from tdms2mat.analysis.startup_counter import (
+            SPEED_CHANNEL_IDX,
+            count_startups_shutdowns,
+        )
+
+        n_cols = max(SPEED_CHANNEL_IDX + 1, 16)
+        data_matrix = np.zeros((9, n_cols))
+        # Ciclo real: off->on ... on->off, con un dip de 1 muestra en medio.
+        speed = np.array([0, 0, 120, 120, 0, 120, 120, 0, 0], dtype=float)
+        data_matrix[:, SPEED_CHANNEL_IDX] = speed
+        mat = {"data": data_matrix}
+
+        starts, stops, est_ini, est_fin, _ = count_startups_shutdowns(mat)
+        assert starts == 1
+        assert stops == 1
+        assert est_ini == "Apagada"
+        assert est_fin == "Apagada"
 
     def test_always_off_gives_zero_counts(self) -> None:
         from tdms2mat.analysis.startup_counter import (
