@@ -248,7 +248,8 @@ def process_mat_folder(
 ) -> None:
     """Procesa todos los .mat y actualiza/crea el Excel de arranques y paradas.
 
-    - Solo procesa archivos nuevos (no presentes en el Excel existente).
+    - Si existe Excel previo, procesa desde la última fecha registrada en adelante.
+    - Además, solo procesa archivos nuevos (no presentes por nombre en el Excel).
     - Rellena días faltantes con ceros.
     - Ordena cronológicamente por fecha.
 
@@ -271,6 +272,7 @@ def process_mat_folder(
         "Estado Inicial", "Estado Final", "Archivo",
         "Total Acumulado", "Movimientos Acumulados",
     ]
+    last_recorded_date: Optional[datetime] = None
 
     # Cargar Excel existente o crear vacío
     if os.path.exists(excel_path):
@@ -282,6 +284,15 @@ def process_mat_folder(
         base_columns = [c for c in expected_columns if c not in ("Total Acumulado", "Movimientos Acumulados")]
         df_excel = df_excel[base_columns]
         processed_files: set = set(df_excel["Archivo"].dropna())
+
+        parsed_existing_dates = df_excel["Fecha"].apply(parse_fecha_string)
+        valid_existing_dates = parsed_existing_dates.dropna()
+        if not valid_existing_dates.empty:
+            last_recorded_date = valid_existing_dates.max()
+            log(
+                "Modo incremental por fecha habilitado. "
+                f"Última fecha en Excel: {format_fecha_string(last_recorded_date)}"
+            )
     else:
         base_columns = [c for c in expected_columns if c not in ("Total Acumulado", "Movimientos Acumulados")]
         df_excel = pd.DataFrame(columns=base_columns)
@@ -296,6 +307,18 @@ def process_mat_folder(
     for mat_file in mat_files:
         if mat_file in processed_files:
             log(f"Saltando (ya procesado): {mat_file}")
+            continue
+
+        file_date = parse_fecha_string(mat_file.split("-")[0])
+        if (
+            last_recorded_date is not None
+            and file_date is not None
+            and file_date.date() < last_recorded_date.date()
+        ):
+            log(
+                "Saltando (anterior al último registro en Excel): "
+                f"{mat_file}"
+            )
             continue
 
         mat_path = os.path.join(mat_folder, mat_file)
