@@ -275,3 +275,38 @@ class TestProcessMatFolder:
         archivos = set(df["Archivo"].dropna())
         assert "25.7.9-u05.mat" not in archivos
         assert "25.7.11-u05.mat" in archivos
+
+    def test_skips_files_on_same_last_excel_date(self, tmp_dir: Path) -> None:
+        """Con Excel previo, no debe reprocesar archivos del mismo último día."""
+        import pandas as pd
+        from tdms2mat.analysis.startup_counter import process_mat_folder
+
+        mat_dir = tmp_dir / "mat"
+        mat_dir.mkdir()
+        self._make_mat(mat_dir / "25.7.10-u99.mat")
+        self._make_mat(mat_dir / "25.7.11-u05.mat")
+
+        excel_path = str(tmp_dir / "output.xlsx")
+        df_existing = pd.DataFrame(
+            [
+                {
+                    "Fecha": "25.7.10",
+                    "Arranques": 1,
+                    "Paradas": 1,
+                    "Total": 2,
+                    "Horas Encendida": 1.0,
+                    "Movimientos": 0,
+                    "Estado Inicial": "Apagada",
+                    "Estado Final": "Apagada",
+                    "Archivo": "25.7.10-u05.mat",
+                }
+            ]
+        )
+        df_existing.to_excel(excel_path, index=False)
+
+        process_mat_folder(str(mat_dir), excel_path)
+
+        df = pd.read_excel(excel_path)
+        archivos = set(df["Archivo"].dropna())
+        assert "25.7.10-u99.mat" not in archivos
+        assert "25.7.11-u05.mat" in archivos

@@ -313,10 +313,10 @@ def process_mat_folder(
         if (
             last_recorded_date is not None
             and file_date is not None
-            and file_date.date() < last_recorded_date.date()
+            and file_date.date() <= last_recorded_date.date()
         ):
             log(
-                "Saltando (anterior al último registro en Excel): "
+                "Saltando (anterior o igual al último registro en Excel): "
                 f"{mat_file}"
             )
             continue
