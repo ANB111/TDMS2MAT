@@ -29,6 +29,8 @@ class TestCountStartupsShutdowns:
 
         n_cols = max(SPEED_CHANNEL_IDX + 1, 16)
         data_matrix = np.zeros((10, n_cols))
+        # Mantener una señal base distinta de cero para simular adquisición conectada.
+        data_matrix[:, 0] = 1.0
         # Samples 0–4 off; samples 5–9 on
         data_matrix[5:, SPEED_CHANNEL_IDX] = 120.0
         mat = {"data": data_matrix}
@@ -46,6 +48,7 @@ class TestCountStartupsShutdowns:
 
         n_cols = max(SPEED_CHANNEL_IDX + 1, 16)
         data_matrix = np.zeros((14, n_cols))
+        data_matrix[:, 0] = 1.0
         # Tres ciclos completos con estados estables (sin casos borde de 1 muestra).
         speed = np.array(
             [0, 0, 120, 120, 0, 0, 120, 120, 0, 0, 120, 120, 0, 0],
@@ -66,6 +69,7 @@ class TestCountStartupsShutdowns:
 
         n_cols = max(SPEED_CHANNEL_IDX + 1, 16)
         data_matrix = np.zeros((9, n_cols))
+        data_matrix[:, 0] = 1.0
         # Ciclo real: off->on ... on->off, con un dip de 1 muestra en medio.
         speed = np.array([0, 0, 120, 120, 0, 120, 120, 0, 0], dtype=float)
         data_matrix[:, SPEED_CHANNEL_IDX] = speed
@@ -85,12 +89,35 @@ class TestCountStartupsShutdowns:
 
         n_cols = max(SPEED_CHANNEL_IDX + 1, 16)
         data_matrix = np.zeros((20, n_cols))
+        data_matrix[:, 0] = 1.0
         mat = {"data": data_matrix}
         starts, stops, est_ini, est_fin, _ = count_startups_shutdowns(mat)
         assert starts == 0
         assert stops == 0
         assert est_ini == "Apagada"
         assert est_fin == "Apagada"
+
+    def test_internal_all_zero_gap_is_ignored_as_disconnection(self) -> None:
+        """Un hueco interno con todas las columnas en cero no debe contar ciclos."""
+        from tdms2mat.analysis.startup_counter import (
+            SPEED_CHANNEL_IDX,
+            count_startups_shutdowns,
+        )
+
+        n_cols = max(SPEED_CHANNEL_IDX + 1, 16)
+        data_matrix = np.zeros((8, n_cols))
+        data_matrix[:, 0] = 1.0
+        data_matrix[:, SPEED_CHANNEL_IDX] = 120.0
+
+        # Simula desconexión: filas internas completamente en cero.
+        data_matrix[3:5, :] = 0.0
+
+        mat = {"data": data_matrix}
+        starts, stops, est_ini, est_fin, _ = count_startups_shutdowns(mat)
+        assert starts == 0
+        assert stops == 0
+        assert est_ini == "Encendida"
+        assert est_fin == "Encendida"
 
     def test_always_on_gives_zero_counts(self) -> None:
         from tdms2mat.analysis.startup_counter import (
@@ -195,6 +222,7 @@ class TestProcessMatFolder:
 
         n_cols = max(SPEED_CHANNEL_IDX + 1, 16)
         data = np.zeros((n, n_cols))
+        data[:, 0] = 1.0
         data[:n_on, SPEED_CHANNEL_IDX] = 120.0
         time_epoch = np.arange(n, dtype=float)
         savemat(str(path), {"data": data, "time_epoch": time_epoch})
@@ -310,3 +338,47 @@ class TestProcessMatFolder:
         archivos = set(df["Archivo"].dropna())
         assert "25.7.10-u99.mat" not in archivos
         assert "25.7.11-u05.mat" in archivos
+
+    def test_infers_startup_on_reconnection_after_gap(self, tmp_dir: Path) -> None:
+        """Si hay gap de días y reaparece encendida tras quedar apagada, suma 1 arranque."""
+        import pandas as pd
+        from tdms2mat.analysis.startup_counter import process_mat_folder
+
+        mat_dir = tmp_dir / "mat"
+        mat_dir.mkdir()
+
+        # Día 1: termina apagada.
+        self._make_mat(mat_dir / "25.7.10-u05.mat", n=100, n_on=0)
+        # Día 4: arranca ya encendida (sin transición observable dentro del archivo).
+        self._make_mat(mat_dir / "25.7.13-u05.mat", n=100, n_on=100)
+
+        excel_path = str(tmp_dir / "output.xlsx")
+        process_mat_folder(str(mat_dir), excel_path)
+
+        df = pd.read_excel(excel_path)
+        row = df[df["Archivo"] == "25.7.13-u05.mat"].iloc[0]
+        assert int(row["Arranques"]) == 1
+        assert int(row["Paradas"]) == 0
+        assert int(row["Total"]) == 1
+
+    def test_infers_shutdown_on_reconnection_after_gap(self, tmp_dir: Path) -> None:
+        """Si hay gap de días y reaparece apagada tras quedar encendida, suma 1 parada."""
+        import pandas as pd
+        from tdms2mat.analysis.startup_counter import process_mat_folder
+
+        mat_dir = tmp_dir / "mat"
+        mat_dir.mkdir()
+
+        # Día 1: termina encendida.
+        self._make_mat(mat_dir / "25.7.10-u05.mat", n=100, n_on=100)
+        # Día 4: aparece apagada (sin transición observable dentro del archivo).
+        self._make_mat(mat_dir / "25.7.13-u05.mat", n=100, n_on=0)
+
+        excel_path = str(tmp_dir / "output.xlsx")
+        process_mat_folder(str(mat_dir), excel_path)
+
+        df = pd.read_excel(excel_path)
+        row = df[df["Archivo"] == "25.7.13-u05.mat"].iloc[0]
+        assert int(row["Arranques"]) == 0
+        assert int(row["Paradas"]) == 1
+        assert int(row["Total"]) == 1

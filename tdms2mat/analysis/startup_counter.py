@@ -42,6 +42,10 @@ SHUTDOWN_OFF_THRESHOLD: float = STARTUP_ON_THRESHOLD
 # Si la transición queda pendiente al final de la serie, se confirma una vez.
 STATE_CONFIRM_SAMPLES: int = 2
 
+# Bloque mínimo (muestras) de filas totalmente en cero para considerar
+# desconexión de adquisición cuando aparece en medio de dos tramos válidos.
+DISCONNECTED_MIN_BLOCK_SAMPLES: int = 2
+
 
 # ---------------------------------------------------------------------------
 # Funciones de análisis (puras — sin I/O ni logging)
@@ -69,6 +73,10 @@ def count_startups_shutdowns(
         raw = np.atleast_2d(mat_data["data"])
         if raw.ndim < 2 or raw.shape[0] == 0 or raw.shape[1] <= SPEED_CHANNEL_IDX:
             return 0, 0, "Desconocido", "Desconocido", np.array([])
+        disconnected_mask = detect_disconnected_rows(
+            raw,
+            min_block_samples=DISCONNECTED_MIN_BLOCK_SAMPLES,
+        )
         speed_data: np.ndarray = raw[:, SPEED_CHANNEL_IDX]
     except (IndexError, KeyError):
         return 0, 0, "Desconocido", "Desconocido", np.array([])
@@ -86,8 +94,47 @@ def count_startups_shutdowns(
         on_threshold=STARTUP_ON_THRESHOLD,
         off_threshold=SHUTDOWN_OFF_THRESHOLD,
         confirm_samples=STATE_CONFIRM_SAMPLES,
+        disconnected_mask=disconnected_mask,
     )
     return startups, shutdowns, estado_inicial, estado_final, speed_data
+
+
+def detect_disconnected_rows(
+    raw_data: np.ndarray,
+    min_block_samples: int = DISCONNECTED_MIN_BLOCK_SAMPLES,
+) -> np.ndarray:
+    """Detecta huecos de desconexión como bloques internos de filas en cero.
+
+    Se marcan solo bloques **internos** (ni al inicio ni al final) para evitar
+    confundir periodos reales de máquina apagada al arranque/cierre del archivo.
+    """
+    raw = np.asarray(raw_data, dtype=float)
+    if raw.ndim != 2 or raw.shape[0] == 0:
+        return np.zeros(raw.shape[0], dtype=bool)
+
+    zero_rows = np.all(raw == 0.0, axis=1)
+    if not np.any(zero_rows):
+        return np.zeros(raw.shape[0], dtype=bool)
+
+    min_len = max(1, int(min_block_samples))
+    disconnected = np.zeros(raw.shape[0], dtype=bool)
+
+    i = 0
+    n = raw.shape[0]
+    while i < n:
+        if not zero_rows[i]:
+            i += 1
+            continue
+        start = i
+        while i < n and zero_rows[i]:
+            i += 1
+        end = i  # exclusivo
+
+        is_internal = start > 0 and end < n
+        if is_internal and (end - start) >= min_len:
+            disconnected[start:end] = True
+
+    return disconnected
 
 
 def _count_with_hysteresis(
@@ -95,12 +142,72 @@ def _count_with_hysteresis(
     on_threshold: float,
     off_threshold: float,
     confirm_samples: int,
+    disconnected_mask: Optional[np.ndarray] = None,
 ) -> Tuple[int, int, str, str]:
     """Cuenta transiciones con histéresis y confirmación de estado.
 
     Esta lógica evita falsos conteos por ruido/rebote cerca de cero.
     """
     arr = np.asarray(speed_data, dtype=float).flatten()
+    if arr.size == 0:
+        return 0, 0, "Desconocido", "Desconocido"
+
+    if disconnected_mask is None:
+        disconnected = np.zeros(arr.size, dtype=bool)
+    else:
+        disconnected = np.asarray(disconnected_mask, dtype=bool).flatten()
+        if disconnected.size < arr.size:
+            padded = np.zeros(arr.size, dtype=bool)
+            padded[: disconnected.size] = disconnected
+            disconnected = padded
+        elif disconnected.size > arr.size:
+            disconnected = disconnected[: arr.size]
+
+    connected_idx = np.flatnonzero(~disconnected)
+    if connected_idx.size == 0:
+        return 0, 0, "Desconocido", "Desconocido"
+
+    # Separar tramos conectados contiguos e ignorar transiciones entre tramos.
+    split_at = np.where(np.diff(connected_idx) > 1)[0]
+    seg_starts = np.r_[0, split_at + 1]
+    seg_ends = np.r_[split_at, connected_idx.size - 1]
+
+    startups = 0
+    shutdowns = 0
+    estado_inicial = "Desconocido"
+    estado_final = "Desconocido"
+
+    for seg_i, (s_idx, e_idx) in enumerate(zip(seg_starts, seg_ends)):
+        idx_slice = connected_idx[s_idx : e_idx + 1]
+        seg = arr[idx_slice]
+        (
+            seg_startups,
+            seg_shutdowns,
+            seg_estado_ini,
+            seg_estado_fin,
+        ) = _count_contiguous_segment(
+            seg,
+            on_threshold=on_threshold,
+            off_threshold=off_threshold,
+            confirm_samples=confirm_samples,
+        )
+
+        startups += seg_startups
+        shutdowns += seg_shutdowns
+        if seg_i == 0:
+            estado_inicial = seg_estado_ini
+        estado_final = seg_estado_fin
+
+    return startups, shutdowns, estado_inicial, estado_final
+
+
+def _count_contiguous_segment(
+    arr: np.ndarray,
+    on_threshold: float,
+    off_threshold: float,
+    confirm_samples: int,
+) -> Tuple[int, int, str, str]:
+    """Cuenta transiciones en un tramo sin desconexiones."""
     if arr.size == 0:
         return 0, 0, "Desconocido", "Desconocido"
 
@@ -157,6 +264,7 @@ def calculate_runtime_hours(
     speed_data: np.ndarray,
     time_epoch: Optional[np.ndarray],
     sample_rate_hint: float = 10.0,
+    disconnected_mask: Optional[np.ndarray] = None,
 ) -> Tuple[float, float]:
     """Calcula las horas encendida y las horas totales disponibles.
 
@@ -170,7 +278,18 @@ def calculate_runtime_hours(
     if speed_array.size == 0:
         return 0.0, 0.0
 
-    on_mask = speed_array >= STARTUP_ON_THRESHOLD
+    if disconnected_mask is None:
+        disconnected = np.zeros(speed_array.size, dtype=bool)
+    else:
+        disconnected = np.asarray(disconnected_mask, dtype=bool).flatten()
+        if disconnected.size < speed_array.size:
+            padded = np.zeros(speed_array.size, dtype=bool)
+            padded[: disconnected.size] = disconnected
+            disconnected = padded
+        elif disconnected.size > speed_array.size:
+            disconnected = disconnected[: speed_array.size]
+
+    on_mask = (speed_array >= STARTUP_ON_THRESHOLD) & (~disconnected)
     time_array: Optional[np.ndarray] = None
 
     if isinstance(time_epoch, np.ndarray) and time_epoch.size:
@@ -181,12 +300,15 @@ def calculate_runtime_hours(
     if time_array is not None and time_array.size >= speed_array.size:
         time_array = time_array[: speed_array.size]
         diffs = np.diff(time_array)
-        diffs = np.where(diffs > 0, diffs, 0.0)
+        valid_pair = (~disconnected[:-1]) & (~disconnected[1:])
+        diffs = np.where((diffs > 0) & valid_pair, diffs, 0.0)
         intervals = np.zeros(speed_array.size, dtype=float)
         intervals[:-1] = diffs
     else:
         sample_rate = float(sample_rate_hint) if sample_rate_hint else 10.0
         intervals = np.full(speed_array.size, 1.0 / sample_rate, dtype=float)
+        valid_pair = (~disconnected[:-1]) & (~disconnected[1:])
+        intervals[:-1] = np.where(valid_pair, intervals[:-1], 0.0)
         if intervals.size:
             intervals[-1] = 0.0
 
@@ -273,6 +395,8 @@ def process_mat_folder(
         "Total Acumulado", "Movimientos Acumulados",
     ]
     last_recorded_date: Optional[datetime] = None
+    last_known_state_date: Optional[datetime] = None
+    last_known_state: Optional[str] = None
 
     # Cargar Excel existente o crear vacío
     if os.path.exists(excel_path):
@@ -293,6 +417,21 @@ def process_mat_folder(
                 "Modo incremental por fecha habilitado. "
                 f"Última fecha en Excel: {format_fecha_string(last_recorded_date)}"
             )
+
+        # Último estado confiable para inferir transición al reconectar
+        state_rows = df_excel.copy()
+        state_rows["__fecha_dt"] = parsed_existing_dates
+        state_rows = state_rows[
+            state_rows["__fecha_dt"].notna()
+            & state_rows["Estado Final"].isin(["Encendida", "Apagada"])
+            & state_rows["Archivo"].notna()
+            & (state_rows["Archivo"].astype(str).str.strip() != "")
+        ]
+        if not state_rows.empty:
+            state_rows = state_rows.sort_values("__fecha_dt", kind="mergesort")
+            last_state_row = state_rows.iloc[-1]
+            last_known_state_date = last_state_row["__fecha_dt"]
+            last_known_state = str(last_state_row["Estado Final"])
     else:
         base_columns = [c for c in expected_columns if c not in ("Total Acumulado", "Movimientos Acumulados")]
         df_excel = pd.DataFrame(columns=base_columns)
@@ -348,9 +487,46 @@ def process_mat_folder(
                 processed_files.add(mat_file)
                 continue
 
+            disconnected_mask = detect_disconnected_rows(
+                raw_data,
+                min_block_samples=DISCONNECTED_MIN_BLOCK_SAMPLES,
+            )
+            n_disconnected = int(disconnected_mask.sum())
+            if n_disconnected > 0:
+                log(
+                    f"ADVERTENCIA: '{mat_file}' contiene {n_disconnected} muestra(s) "
+                    "de desconexión (filas en cero internas). Se ignoran para conteo."
+                )
+
             startups, shutdowns, est_ini, est_fin, speed_data = count_startups_shutdowns(
                 mat_data
             )
+
+            if (
+                last_known_state_date is not None
+                and last_known_state in ("Encendida", "Apagada")
+                and file_date is not None
+                and est_ini in ("Encendida", "Apagada")
+            ):
+                gap_days = (file_date.date() - last_known_state_date.date()).days
+                if gap_days > 1 and est_ini != last_known_state:
+                    if last_known_state == "Apagada" and est_ini == "Encendida":
+                        startups += 1
+                        log(
+                            "Transición inferida por reconexión: "
+                            f"+1 arranque en '{mat_file}' "
+                            f"(gap {gap_days} días, estado previo: {last_known_state}, "
+                            f"estado inicial: {est_ini})."
+                        )
+                    elif last_known_state == "Encendida" and est_ini == "Apagada":
+                        shutdowns += 1
+                        log(
+                            "Transición inferida por reconexión: "
+                            f"+1 parada en '{mat_file}' "
+                            f"(gap {gap_days} días, estado previo: {last_known_state}, "
+                            f"estado inicial: {est_ini})."
+                        )
+
             total = startups + shutdowns
 
             try:
@@ -365,7 +541,11 @@ def process_mat_folder(
                 movimientos = None
 
             time_epoch = mat_data.get("time_epoch")
-            horas_enc, horas_disp = calculate_runtime_hours(speed_data, time_epoch)
+            horas_enc, horas_disp = calculate_runtime_hours(
+                speed_data,
+                time_epoch,
+                disconnected_mask=disconnected_mask,
+            )
 
             # Heurístico de día completo con máquina siempre encendida
             if (
@@ -397,6 +577,10 @@ def process_mat_folder(
                 [df_excel, pd.DataFrame([new_row])], ignore_index=True
             )
             processed_files.add(mat_file)
+
+            if file_date is not None and est_fin in ("Encendida", "Apagada"):
+                last_known_state_date = file_date
+                last_known_state = est_fin
 
         except Exception as exc:
             log(f"Error procesando '{mat_file}': {exc}")
