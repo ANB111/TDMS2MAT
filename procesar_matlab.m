@@ -37,8 +37,23 @@ function procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_ch
     t = (0:N-1)'/fs;
     t_horas = t / 3600;
 
+    %— Verificar muestras mínimas para rainflow
+    if N < 3
+        warning("procesar_matlab:insuficienteMuestras", ...
+            "'%s' tiene sólo %d muestra(s); se omite el análisis rainflow.", name, N);
+        fprintf("%s → OMITIDO (menos de 3 muestras)\n", name);
+        return;
+    end
+
     %— Conteo rainflow básico
-    [c, ~, rmr, ~, idx] = rainflow(Fza_Hid);
+    try
+        [c, ~, rmr, ~, idx] = rainflow(Fza_Hid);
+    catch ME
+        warning("procesar_matlab:rainflowError", ...
+            "'%s' — rainflow básico falló: %s", name, ME.message);
+        fprintf("%s → OMITIDO (rainflow falló: %s)\n", name, ME.message);
+        return;
+    end
     t_peaks   = t(idx);
     Fza_peaks = Fza_Hid(idx);
 
@@ -48,7 +63,13 @@ function procesar_matlab(matFilePath, excelFolder, graficos, escritura, fs, n_ch
     lim_inf = -0.45;
 
     %— Rainflow con muestreo fs
-    [cFs, ~, ~, ~, ~] = rainflow(Fza_Hid, fs);
+    try
+        [cFs, ~, ~, ~, ~] = rainflow(Fza_Hid, fs);
+    catch ME
+        warning("procesar_matlab:rainflowFsError", ...
+            "'%s' — rainflow(fs) falló: %s", name, ME.message);
+        cFs = zeros(0, 5);
+    end
     To = array2table(cFs, ...
         'VariableNames', {'Ciclos','Rango [kN]','Media [kN]','ti [s]','ts [s]'});
 

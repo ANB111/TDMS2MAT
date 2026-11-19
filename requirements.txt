@@ -1,4 +1,0 @@
-nptdms
-pandas
-scipy
-tqdm
